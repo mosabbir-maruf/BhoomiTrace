@@ -1,0 +1,55 @@
+# Build-context exclusions; keeps secrets, tests, and private agent files out of the image
+# Note: drizzle/ remains included so the migration CLI can read generated SQL at runtime
+
+# Installed dependencies and build output
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# Local environment and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Private evidence storage
+.local-storage
+data
+uploads
+
+# Docker build files
+Dockerfile
+.dockerignore
+
+# Tests, fixtures, and developer tooling
+test
+vitest.config.ts
+drizzle.config.ts
+.mise.toml
+
+# Documentation
+*.md
+docs
+
+# Version-control and package-manager caches
+.git
+.gitignore
+.gitattributes
+.pnpm-store
+
+# Private agent instructions, skills, and session metadata
+CLAUDE.md
+AGENTS.md
+agentm.md
+agentmd.md
+*.agent.md
+.claude
+.agents
+.agent
+.cursor
+.gemini
+.codex
+skills
+skills-lock.json
+*.log

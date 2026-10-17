@@ -8,16 +8,21 @@ to it, and keeps an append-only trail of who decided what. It does not determine
 legal ownership and does not issue legal approval: everything it raises is a
 **discrepancy for a person to resolve**.
 
-This document describes Phase 1 (foundation, schema, database policy) and
+This document describes Phase 1 (foundation, schema, database policy),
 Phase 2 (authentication, the REST surface, uploaded evidence, deterministic
-validation, the reviewer workflow, the audit trail, and the background worker).
+validation, the reviewer workflow, the audit trail, and the background worker),
+and Phase 3 (the containerised local stack: a multi-stage image, Compose
+services, migrations as a one-shot job, and the operations workflow).
 
 ## Prerequisites
 
 - **Node.js 24 LTS**, installed per-user with [mise](https://mise.jdx.dev). The
   exact version is pinned in `.mise.toml`. Do not install Node globally, via
   Homebrew, or via a global npm install.
-- **Docker Desktop**, for the local database.
+- **Docker Desktop**, required for the local database and for the containerised
+  backend stack. Docker is *not* required if you run the API and worker directly
+  with mise against a containerised database — the workflow in
+  [First-time setup](#first-time-setup) below.
 - PostgreSQL is **not** installed on the host; it runs in a container.
 
 `mise` is installed under `~/.local/bin` and this repository deliberately does
@@ -67,6 +72,160 @@ your shell configuration, so it is left to you and is not done by this project.
 `docker compose up -d` publishes PostgreSQL on **`127.0.0.1:5433` only** and
 creates two databases: `bhoomitrace` (development) and `bhoomitrace_test`
 (integration tests). Both come from `docker/postgres/init/`.
+
+## Containerised local stack
+
+The whole backend runs in containers: PostgreSQL, a one-shot migration job, the
+API, and a separate background worker. The image is built from
+`backend/Dockerfile`; `docker-compose.yml` at the repository root wires the
+services together. Nothing in this section needs a host Node install.
+
+**Phase 3 containerises the backend only.** The frontend is not part of the
+Compose stack; see
+[Running the frontend against the local API](#running-the-frontend-against-the-local-api).
+
+### Start the stack
+
+```bash
+# from the repository root
+docker compose up -d --build     # build the image, then start every service
+docker compose ps                # postgres + migrate + api + worker
+```
+
+Startup order is enforced by Compose, not assumed:
+
+1. `postgres` becomes **healthy** (`pg_isready`).
+2. `migrate` runs once and **exits 0** (`node dist/db/migrate-cli.js`).
+3. `api` and `worker` start, because they wait on
+   `migrate: service_completed_successfully`.
+
+Migrations never run from the API or the worker, so scaling either service
+cannot produce two migrators. No `.env` file is required: every value has a safe
+local default in `docker-compose.yml`. To override one, copy the root
+`.env.example` to `.env`.
+
+### Services, ports, and storage
+
+| Service | Command | Published | Notes |
+| ------- | ------- | --------- | ----- |
+| `postgres` | `postgres:17-alpine` | `127.0.0.1:5433` | named volume `bhoomitrace-postgres-data` |
+| `migrate` | `node dist/db/migrate-cli.js` | — | one-shot, `restart: "no"` |
+| `api` | `node dist/server.js` | `127.0.0.1:3000` | health check on `/health` |
+| `worker` | `node dist/worker/main.js` | — | no HTTP surface |
+
+Both published ports are bound to the **loopback interface only**, so the stack
+is not reachable from another host on the network.
+
+Inside the containers the database URL uses the Compose service name and the
+internal port — `postgres://…@postgres:5432/…` — never `localhost`, which inside
+a container means the container itself.
+
+Uploaded evidence is written to `/data/uploads` on the named volume
+`bhoomitrace-backend-uploads`, shared by the API (which writes) and the worker
+(which reads during extraction). The directory is owned by the unprivileged
+`node` user (uid 1000), and both processes run as that user.
+
+The local stack sets `NODE_ENV=development` deliberately. Production validation
+is not weakened: `NODE_ENV=production` still requires `COOKIE_SECURE=true` and at
+least one exact `CORS_ALLOWED_ORIGINS` entry, and the application refuses to
+start otherwise.
+
+### Health checks
+
+```bash
+# readiness: pings PostgreSQL, returns 503 when the database is unavailable
+curl -sS http://127.0.0.1:3000/health
+
+# liveness: never touches the database
+curl -sS http://127.0.0.1:3000/health/live
+
+# what the container itself reports
+docker compose ps
+```
+
+### Logs and status
+
+```bash
+docker compose ps                        # service state and health
+docker compose logs -f api               # follow the API
+docker compose logs -f worker            # follow the worker
+docker compose logs --tail=50 migrate    # the migration run
+```
+
+Container logs redact the database password; the connection is logged as
+`postgres://bhoomitrace:***@postgres:5432/bhoomitrace`.
+
+### Synthetic job smoke test
+
+The worker is a separate process, so a job enqueued through the API proves that
+both halves are wired correctly. Log in first (see [Session](#session)
+for the cookie and `x-csrf-token` flow), then enqueue. A reconciliation job is
+the simplest because it needs no uploaded file:
+
+```bash
+curl -sS -b cookies.txt -X POST http://127.0.0.1:3000/api/v1/jobs \
+  -H "x-csrf-token: $CSRF" -H 'content-type: application/json' \
+  -d "{\"kind\":\"parcel_reconciliation\",\"parcelId\":\"$PARCEL_ID\"}"
+
+# poll until it reaches a terminal status
+curl -sS -b cookies.txt http://127.0.0.1:3000/api/v1/jobs/$JOB_ID
+```
+
+The default provider is `mock`: deterministic, offline, and credential-free. No
+live Gemini or Groq request is made locally.
+
+### Migrations and migration failures
+
+`migrate` applies every pending migration once and records it in
+`drizzle.__drizzle_migrations`, so re-running is safe. If it fails, the API and
+the worker will not start — intentionally, because starting them against an
+unmigrated schema would fail later and less clearly. `docker compose ps` shows
+`migrate` as `Exited (0)` on success; any other exit code is a failure.
+
+To diagnose one:
+
+```bash
+docker compose logs migrate          # the failing statement
+docker compose run --rm migrate      # run it again in isolation
+```
+
+Migrations are **additive and append-only**: an applied migration file is never
+edited, and a correction arrives as a new migration. Do not delete the database
+volume to "fix" a migration error; read the log and the
+`drizzle.__drizzle_migrations` rows first.
+
+### Stop and restart safely
+
+```bash
+docker compose stop api worker   # leave the database running
+docker compose start api worker  # start them again
+docker compose restart api       # restart one service
+docker compose down              # stop everything, KEEPING both named volumes
+```
+
+`docker compose down` keeps `bhoomitrace-postgres-data` and
+`bhoomitrace-backend-uploads`, so database rows and uploaded evidence survive.
+Never run `docker compose down -v`, and never prune volumes: that deletes both
+volumes along with the local database and every uploaded file.
+
+A job that is `queued` while the worker is stopped is not lost: it stays in the
+database and is claimed when a worker starts again.
+
+### Running the frontend against the local API
+
+The frontend is **not** containerised in this phase. Run it separately:
+
+1. Start the backend stack (`docker compose up -d --build`).
+2. Confirm `http://127.0.0.1:3000/health` returns `200`.
+3. Start the frontend dev server in `frontend/` on port 5173, following its own
+   instructions.
+4. `CORS_ALLOWED_ORIGINS` already defaults to
+   `http://localhost:5173,http://127.0.0.1:5173`. Add your origin if you use a
+   different port.
+
+Cookie-based sessions require the browser to send credentials, and every
+state-changing request needs an `x-csrf-token` header carrying the token returned
+by `POST /api/v1/auth/login`.
 
 ## Commands
 
@@ -508,6 +667,8 @@ src/
 ├── services/            Domain logic, each with its audit events
 ├── validation/rules.ts  The deterministic checks
 └── worker/              Job loop, processors, process entry point
+Dockerfile               Multi-stage image build (API, worker, migrate)
+.dockerignore            Build-context exclusions for the image
 drizzle/                 Generated SQL migrations (committed)
 test/
 ├── unit/                Pure logic; no database
@@ -615,7 +776,7 @@ Recorded honestly, because each of these is a real gap rather than a detail.
 - **No account lockout.** Brute-force resistance is the rate limit plus Argon2id
   cost, not a lockout counter. A deliberate choice for now, not a guarantee.
 - **`areaDecimal` is returned as a string.** The backend always returns exact
-  decimals as strings, plus `ownershipShare` as a reduced `"n/d"`. The Figma Make
+  decimals as strings, plus `ownershipShare` as a reduced `"n/d"`. The React
   frontend's contract in `frontend/src/lib/api/` expects `areaDecimal` as a number
   (and camelCase FastAPI-style payloads). This is a **documented mismatch, not a
   frontend change**: the frontend is untouched and uncommitted on this branch.
@@ -643,8 +804,22 @@ Recorded honestly, because each of these is a real gap rather than a detail.
   deployment states that a proxy is in front of the process. Turning it on without
   such a proxy lets a caller choose its own address in the logs and in the rate
   limiter.
-- **No application Dockerfile, production Compose service, or CI workflow** is
-  part of this phase.
+- **Phase 3 containerises the backend only.** `docker-compose.yml` runs
+  PostgreSQL, the one-shot migration job, the API, and the worker. The frontend
+  is not part of the Compose stack and is run separately against the local API
+  (see [Running the frontend against the local API](#running-the-frontend-against-the-local-api)).
+- **No CI workflow and no production deployment** is part of this phase. The
+  image is built and run locally; publishing to a registry, and any
+  orchestrator-specific configuration, belong to later phases.
+- **The base image tracks the Node 24 LTS line, not a digest.**
+  `node:24-bookworm-slim` is deliberately not pinned by digest yet; the glibc
+  variant is used because `@node-rs/argon2` resolves a prebuilt native binding
+  per libc, so an Alpine/musl base is not used.
+- **The worker has no health check.** It exposes no HTTP surface, so its health
+  is observed through `docker compose ps` (the container stays `Up`) and its
+  logs. It verifies database connectivity at startup and exits non-zero when the
+  database is unreachable; `restart: unless-stopped` and dependency ordering
+  recover it.
 
 ## Synthetic data only
 
