@@ -1,0 +1,162 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, backend, 'infra/**']
+    paths:
+      - 'backend/**'
+      - 'docker/**'
+      - 'docker-compose.yml'
+      - '.github/workflows/ci.yml'
+      - '.env.example'
+  pull_request:
+    branches: [main, backend, 'infra/**']
+    paths:
+      - 'backend/**'
+      - 'docker/**'
+      - 'docker-compose.yml'
+      - '.github/workflows/ci.yml'
+      - '.env.example'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck-build:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+  test:
+    name: Test suite (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bhoomitrace
+          POSTGRES_PASSWORD: bhoomitrace
+          POSTGRES_DB: bhoomitrace
+          POSTGRES_TEST_DB: bhoomitrace_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bhoomitrace -d bhoomitrace"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --mount type=bind,source=${{ github.workspace }}/docker/postgres/init,target=/docker-entrypoint-initdb.d
+    env:
+      NODE_ENV: test
+      LOG_LEVEL: silent
+      TEST_DATABASE_URL: postgres://bhoomitrace:bhoomitrace@127.0.0.1:5432/bhoomitrace_test
+      DATABASE_URL: postgres://bhoomitrace:bhoomitrace@127.0.0.1:5432/bhoomitrace
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      EXTRACTION_PROVIDER: mock
+      AUTH_RATE_LIMIT_MAX: '10000'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Wait for PostgreSQL
+        run: |
+          node -e '
+            const net = require("net");
+            const deadline = Date.now() + 60000;
+            (function tryConnect() {
+              const s = net.createConnection(5432, "127.0.0.1", () => { s.end(); process.exit(0); });
+              s.on("error", () => {
+                if (Date.now() > deadline) { console.error("postgres not ready"); process.exit(1); }
+                setTimeout(tryConnect, 1000);
+              });
+            })();
+          '
+
+      - name: Run test suite
+        run: npm test
+
+  docker:
+    name: Compose validation and image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: docker compose config
+
+      - name: Build backend image
+        run: docker compose build
+
+      - name: Image hygiene check
+        run: |
+          docker run --rm --entrypoint sh bhoomitrace-backend:local -c '
+            set -e
+            test "$(id -u)" = "1000"
+            for p in typescript vitest tsx drizzle-kit; do test ! -e "/app/node_modules/$p"; done
+            test -d /app/drizzle
+            test -d /data/uploads
+            if grep -rIl "bhoomitrace:bhoomitrace" /app 2>/dev/null; then
+              echo "credential literal found in image" >&2
+              exit 1
+            fi
+            echo "image hygiene ok"
+          '
+
+      - name: Smoke test Compose stack
+        run: |
+          set -e
+          docker compose up -d
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:3000/health >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:3000/health
+          curl -sf http://127.0.0.1:3000/health/live
+          docker compose ps
+
+      - name: Tear down Compose stack
+        if: always()
+        run: docker compose down

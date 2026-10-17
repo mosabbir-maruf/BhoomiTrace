@@ -760,6 +760,60 @@ wording correction converges in place, without resetting the volume. The repair 
 limited to the single fixed synthetic finding id and only matches rows that still
 contain the superseded sentence, so it can never overwrite an edited row.
 
+## CI/CD and GHCR
+
+Phase 4 adds GitHub Actions workflows under `.github/workflows/`. They run on
+GitHub-hosted `ubuntu-latest` runners and do not depend on a developer's local
+Docker state or `.env` files.
+
+### Workflows
+
+- **`ci.yml`** -- runs on pushes and pull requests touching `backend/`,
+  `docker/`, `docker-compose.yml`, `.github/workflows/ci.yml`, or `.env.example`.
+  Jobs:
+  - `typecheck-build`: `npm ci`, `npm run typecheck`, `npm run build` (Node 24).
+  - `test`: spins up a `postgres:17-alpine` service container (with the init
+    script mounted so `bhoomitrace` and `bhoomitrace_test` are created), then
+    `npm test` against `TEST_DATABASE_URL`. Migrations are applied by the test
+    harness itself.
+  - `docker`: `docker compose config`, `docker compose build`, an image-hygiene
+    check (non-root user, no dev tooling, migrations present, no credential
+    literal), and a Compose smoke test (`up -d`, health checks, `down`).
+- **`publish-image.yml`** -- publishes `ghcr.io/<owner>/bhoomitrace-backend` on
+  pushes to `main`, version tags (`v*.*.*`), and manual dispatch. Tags:
+  immutable full-SHA (`sha-<40>`), branch, semver (`x.y.z`, `x.y`), and
+  `latest` only on the default branch. Uses `GITHUB_TOKEN` with `packages: write`
+  scoped to the publish job only; no credentials are passed as build arguments.
+- **`ghcr-retention-report.yml`** -- manual (`workflow_dispatch`) dry-run report
+  that lists package versions and marks keep/delete candidates. It **never
+  deletes** anything.
+
+### GHCR retention policy
+
+Applies to `ghcr.io/<owner>/bhoomitrace-backend`:
+
+- **Keep (never delete):**
+  - every version carrying a `sha-*` tag (immutable release reference),
+  - every version carrying a semver tag (`x.y.z`),
+  - the most recent 10 versions per branch tag,
+  - the only remaining version of the package.
+- **Delete candidates (manual review only):**
+  - untagged versions older than 30 days,
+  - branch-tagged versions beyond the most recent 10 per branch.
+- **Rules:** an immutable SHA tag is never removed; the known-good image
+  referenced by a release is never deleted; no automated deletion runs in
+  Phase 4. Deletion is performed manually (or in a later phase with explicit
+  approval) and verified by re-listing the package versions afterwards.
+
+### Limitations
+
+- No push to EC2 or other hosts is performed in Phase 4.
+- The retention report is reporting-only; automated deletion is deliberately
+  not enabled because safe, verified deletion could not be guaranteed.
+- Package visibility (public vs. private) is governed by the repository/package
+  settings on GitHub and is not asserted here; verify in the GitHub UI after the
+  first publish.
+
 ## Known limitations
 
 Recorded honestly, because each of these is a real gap rather than a detail.
