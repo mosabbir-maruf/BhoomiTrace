@@ -1,8 +1,4 @@
--- Runs once, on first initialisation of the PostgreSQL data volume.
---
--- Creates a separate database for integration tests so that test runs never
--- touch development data. The role created by the container entrypoint already
--- owns the cluster, but ownership is asserted explicitly for clarity.
+-- Create isolated database for integration tests on initial data volume setup
 
 \set test_db `echo "${POSTGRES_TEST_DB:-bhoomitrace_test}"`
 

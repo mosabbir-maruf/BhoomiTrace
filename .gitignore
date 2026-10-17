@@ -1,11 +1,9 @@
-# ---------------------------------------------------------------------------
-# BhoomiTrace — repository-wide ignore rules
-# ---------------------------------------------------------------------------
+# BhoomiTrace repository-wide ignore rules
 
 # macOS
 .DS_Store
 
-# Node / TypeScript
+# Node and TypeScript
 node_modules/
 dist/
 build/
@@ -13,40 +11,33 @@ coverage/
 *.tsbuildinfo
 .pnpm-store/
 
-# Local private storage for uploaded evidence. Uploaded files and their
-# contents are never committed, never logged, and never snapshotted.
+# Local private storage for uploaded evidence
 .local-storage/
 
-# Environment files — never commit real values. Keep the *.example templates.
+# Environment files and templates
 .env
 .env.*
 !.env.example
 !**/.env.example
 
-# Logs, caches, temporary files
+# Logs, caches, and temporary files
 *.log
 logs/
 .cache/
 .tmp-*
 *.pid
 
-# Local database data (Docker named volumes live outside the repo; this guards
-# bind-mounted directories if one is ever added).
+# Local database data
 .docker-data/
 pgdata/
 
-# ---------------------------------------------------------------------------
-# Existing Figma Make frontend scaffold
-# ---------------------------------------------------------------------------
-# `frontend/` is a pre-existing Figma Make export that is NOT part of version
-# control. It is tracked separately when the frontend track begins. It must
-# never be committed from a backend branch, so it is ignored here.
-/frontend/
+# Frontend build outputs and local caches
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+frontend/.vite/
 
-# ---------------------------------------------------------------------------
-# Agent instructions, configurations, skills & metadata — never committed
-# ---------------------------------------------------------------------------
-# Claude instructions and case variants
+# Agent instructions and case variants
 CLAUDE.md
 claude.md
 Claude.md
@@ -65,7 +56,7 @@ AGENTM.md
 [Aa][Gg][Ee][Nn][Tt][Ss].*.md
 [Aa][Gg][Ee][Nn][Tt][Mm].*.md
 
-# Private agent configuration and skill directories/files
+# Private agent configurations, skills, and metadata
 .agent/
 .agents/
 .claude/

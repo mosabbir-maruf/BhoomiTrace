@@ -44,11 +44,7 @@ CREATE INDEX "applications_owner_idx" ON "applications" USING btree ("owner_id")
 CREATE INDEX "applications_status_idx" ON "applications" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "applications_parcel_idx" ON "applications" USING btree ("parcel_id");--> statement-breakpoint
 
--- `updated_at` and `version` are maintained by the database, reusing the
--- functions added in migrations 0001 and 0004, so every write path — including a
--- future script or a manual statement — keeps them consistent. Without the
--- version trigger the optimistic-concurrency token would only advance when
--- application code remembered to advance it.
+-- Maintain updated_at timestamp and optimistic-concurrency version on applications
 CREATE TRIGGER applications_touch_updated_at
   BEFORE UPDATE ON "applications"
   FOR EACH ROW EXECUTE FUNCTION bhoomitrace_touch_updated_at();--> statement-breakpoint

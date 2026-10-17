@@ -80,11 +80,7 @@ CREATE TABLE "readiness_reports" (
 );
 --> statement-breakpoint
 ALTER TABLE "parcels" ADD COLUMN "owner_id" uuid;--> statement-breakpoint
--- `origin` classifies who a record belongs to, so it is NOT NULL with no
--- default: every writer must state whether it is storing demo data or a real
--- account's record. Existing rows all predate Phase 2 and came from the
--- synthetic seed or test fixtures, so they are backfilled as demo data before
--- the constraint is applied.
+-- Backfill existing rows as synthetic_demo before applying NOT NULL constraint
 ALTER TABLE "parcels" ADD COLUMN "origin" "data_origin";--> statement-breakpoint
 UPDATE "parcels" SET "origin" = 'synthetic_demo' WHERE "origin" IS NULL;--> statement-breakpoint
 ALTER TABLE "parcels" ALTER COLUMN "origin" SET NOT NULL;--> statement-breakpoint
@@ -138,22 +134,12 @@ ALTER TABLE "source_documents" ADD CONSTRAINT "source_documents_byte_size_non_ne
 ALTER TABLE "extractions" ADD CONSTRAINT "extractions_version_positive" CHECK ("extractions"."version" >= 1);--> statement-breakpoint
 ALTER TABLE "findings" ADD CONSTRAINT "findings_version_positive" CHECK ("findings"."version" >= 1);--> statement-breakpoint
 
--- --------------------------------------------------------------------------
--- Phase 2 integrity guards
--- --------------------------------------------------------------------------
-
--- `updated_at` maintenance for the new mutable table. The Phase 1 function is
--- reused as-is; only a new trigger is added.
+-- Maintain updated_at timestamp on processing_jobs using shared Phase 1 trigger function
 CREATE TRIGGER processing_jobs_touch_updated_at
   BEFORE UPDATE ON "processing_jobs"
   FOR EACH ROW EXECUTE FUNCTION bhoomitrace_touch_updated_at();--> statement-breakpoint
 
--- Optimistic-concurrency token maintenance.
---
--- The version is bumped by the database rather than by application code, so
--- every code path — including a future script or a manual statement — advances
--- the token. A writer that states an explicit version keeps it, so an operator
--- can still perform a deliberate override if one is ever needed.
+-- Optimistic-concurrency token maintenance function incrementing version on update
 CREATE OR REPLACE FUNCTION bhoomitrace_bump_version()
 RETURNS trigger
 LANGUAGE plpgsql
