@@ -25,7 +25,13 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-bhoomitrace}
       POSTGRES_TEST_DB: ${POSTGRES_TEST_DB:-bhoomitrace_test}
     ports:
-      - "${POSTGRES_HOST_PORT:-5433}:5432"
+      # Bound explicitly to the loopback interface: the local development
+      # database must never be reachable from another host on the network.
+      - target: 5432
+        published: "${POSTGRES_HOST_PORT:-5433}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+        mode: ingress
     volumes:
       - postgres-data:/var/lib/postgresql/data
       # Creates the integration-test database on first initialisation.
