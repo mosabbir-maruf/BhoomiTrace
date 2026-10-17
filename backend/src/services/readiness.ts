@@ -22,6 +22,7 @@ import {
   summariseOutcomes,
 } from '../validation/rules.js'
 import { AuditActions, recordAuditEvent } from './audit.js'
+import { assertJobLeaseHeld, type JobFence } from './jobs.js'
 import { loadVisibleParcel } from './parcels.js'
 
 /**
@@ -90,6 +91,11 @@ export interface GenerateReadinessInput {
   parcelId: string
   rulesVersion: string
   requestId?: string | null
+  /**
+   * When present, the write is fenced on this worker's job lease, so a worker
+   * that lost its job cannot persist a report.
+   */
+  fence?: JobFence
 }
 
 /**
@@ -113,6 +119,11 @@ export async function generateReadinessReport(
   const summary = summariseOutcomes(rules)
 
   const reportId = await database.orm.transaction(async (tx) => {
+    // The fence, when a worker is driving this.
+    if (input.fence !== undefined) {
+      await assertJobLeaseHeld(tx, input.fence)
+    }
+
     const inserted = await tx
       .insert(readinessReports)
       .values({

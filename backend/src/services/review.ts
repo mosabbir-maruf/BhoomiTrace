@@ -4,6 +4,7 @@ import type { Database } from '../db/client.js'
 import type {
   ExtractionReviewStatus,
   FindingKind,
+  FindingReviewAction,
   FindingSeverity,
   FindingStatus,
   ReviewOutcome,
@@ -58,6 +59,11 @@ export interface ReviewDecisionView {
   extractionId: string | null
   reviewerId: string
   outcome: ReviewOutcome
+  /**
+   * The explicit action taken on a finding, or `null` for an extraction decision
+   * and for finding decisions recorded before the action was stored separately.
+   */
+  findingAction: FindingReviewAction | null
   /** The recorded value as it stood when the decision was taken. */
   extractedValue: string | null
   /** The reviewer's correction, present only for a correction. */
@@ -112,6 +118,7 @@ export function toReviewDecisionView(decision: ReviewDecision): ReviewDecisionVi
     extractionId: decision.extractionId,
     reviewerId: decision.reviewerId,
     outcome: decision.outcome,
+    findingAction: decision.findingAction,
     extractedValue: decision.extractedValue,
     proposedValue: decision.proposedValue,
     note: decision.note,
@@ -316,7 +323,8 @@ export async function reviewExtraction(
   })
 }
 
-export type FindingReviewAction = 'under_review' | 'resolved' | 'dismissed'
+/** The finding actions a reviewer may take, derived from the database enum. */
+export type { FindingReviewAction }
 
 export interface ReviewFindingInput {
   reviewer: User
@@ -375,11 +383,23 @@ export async function reviewFinding(
         ? 'resolved'
         : 'dismissed'
 
-  // Both a resolution and a dismissal settle the matter, which the
-  // `review_outcome` vocabulary expresses as `verified`. The distinction between
-  // the two is preserved in the finding's own status and in the audit event,
-  // which carries the structured before/after.
-  const decisionOutcome: ReviewOutcome = 'verified'
+  // The decision's outcome is written to agree with the action, per action:
+  //
+  // - placing a finding under review asks for another look, which the existing
+  //   vocabulary calls `needs_review`;
+  // - resolving a finding confirms it as a real discrepancy;
+  // - dismissing it says the opposite — there was nothing to confirm — and is
+  //   recorded as `dismissed` rather than being flattened into `verified`.
+  //
+  // The action is *also* stored in its own column, so the history says what the
+  // reviewer did in the reviewer's own terms. Both are written in the same
+  // statement, so they cannot disagree.
+  const decisionOutcome: ReviewOutcome =
+    input.action === 'under_review'
+      ? 'needs_review'
+      : input.action === 'resolved'
+        ? 'verified'
+        : 'dismissed'
 
   return database.orm.transaction(async (tx) => {
     const updated = await tx
@@ -404,6 +424,9 @@ export async function reviewFinding(
         extractionId: null,
         reviewerId: input.reviewer.id,
         outcome: decisionOutcome,
+        // The explicit action, so a resolution and a dismissal are never the
+        // same row.
+        findingAction: input.action,
         extractedValue: null,
         proposedValue: null,
         note: reason,

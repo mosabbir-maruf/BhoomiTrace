@@ -3,7 +3,11 @@ import { hostname } from 'node:os'
 import pino from 'pino'
 
 import { VALIDATION_RULES_VERSION } from '../config/constants.js'
-import { describeEnvironment, loadEnvironment } from '../config/env.js'
+import {
+  describeEnvironment,
+  loadEnvironment,
+  workerConfigurationNotes,
+} from '../config/env.js'
 import { loadEnvFile } from '../config/load-env.js'
 import { loggerOptions } from '../config/logging.js'
 import { createDatabase, databaseConfigFromEnvironment } from '../db/client.js'
@@ -59,8 +63,12 @@ if (!provider.isConfigured()) {
 if (env.NODE_ENV === 'production' && provider.name === 'mock') {
   log.error(
     { provider: providerDetails },
-    'the mock provider is a test double, not a reader: it marks every field it has no fixture for as unclear. Set EXTRACTION_PROVIDER and the matching credential before running a production worker.',
+    'the mock provider is a test double, not a reader: it marks every field it has no fixture for as unclear, and its readings do not come from the document. Set EXTRACTION_PROVIDER and the matching credential before running a production worker.',
   )
+}
+
+for (const note of workerConfigurationNotes(env)) {
+  log.warn({ note }, 'worker configuration note')
 }
 
 const worker = new ExtractionWorker({
@@ -74,6 +82,9 @@ const worker = new ExtractionWorker({
   maxAttempts: env.WORKER_MAX_ATTEMPTS,
   retryBackoffSeconds: env.WORKER_RETRY_BACKOFF_SECONDS,
   pollIntervalMs: env.WORKER_POLL_INTERVAL_MS,
+  // Readers are handed the real document, loaded from private storage.
+  uploadDir: env.UPLOAD_DIR,
+  maxContentBytes: env.EXTRACTION_MAX_CONTENT_BYTES,
   log,
 })
 

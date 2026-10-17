@@ -15,18 +15,49 @@ import {
  * External reader adapters.
  *
  * No test here touches the network. The transport is injected, so the assertions
- * are about the request we build and the response we accept — the two places
- * where an adapter can quietly misbehave: sending a document somewhere it should
- * not, or turning a failure into a successful empty read.
+ * are about the request we build and the response we accept — the places where
+ * an adapter can quietly misbehave: sending a document somewhere it should not,
+ * answering without ever sending the document, or turning a failure into a
+ * successful empty read.
  */
 
-const REQUEST: ExtractionRequest = {
-  sourceDocumentId: 'b1000000-0000-4000-8000-000000000001',
-  title: 'RS khatian 104',
-  reference: 'DEMO-RS-104',
-  pageCount: 1,
-  fields: ['khatian', 'area'],
+const PDF_BYTES = Buffer.from('%PDF-1.7\n% bhoomitrace test fixture, not a real record\n%%EOF\n', 'utf8')
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03])
+
+function requestWith(
+  content: ExtractionRequest['content'],
+  fields: ExtractionRequest['fields'] = ['khatian', 'area'],
+): ExtractionRequest {
+  return {
+    sourceDocumentId: 'b1000000-0000-4000-8000-000000000001',
+    title: 'RS khatian 104',
+    reference: 'DEMO-RS-104',
+    pageCount: 1,
+    fields,
+    content,
+  }
 }
+
+/** A PDF, which Gemini reads and Groq cannot. */
+const PDF_REQUEST = requestWith({
+  mediaType: 'application/pdf',
+  bytes: PDF_BYTES,
+  byteSize: PDF_BYTES.byteLength,
+  sha256: 'b'.repeat(64),
+  originalFilename: 'khatian-104.pdf',
+})
+
+/** A PNG, which both readers accept. */
+const IMAGE_REQUEST = requestWith({
+  mediaType: 'image/png',
+  bytes: PNG_BYTES,
+  byteSize: PNG_BYTES.byteLength,
+  sha256: 'c'.repeat(64),
+  originalFilename: 'khatian-104.png',
+})
+
+/** A record with no stored file: nothing to read. */
+const METADATA_ONLY_REQUEST = requestWith(null)
 
 interface CapturedCall {
   url: string
@@ -90,10 +121,47 @@ describe('GeminiExtractionProvider', () => {
     expect(provider.isConfigured()).toBe(false)
   })
 
+  it('declares that it reads document content and what it supports', () => {
+    const provider = new GeminiExtractionProvider(geminiOptions)
+
+    expect(provider.readsDocumentContent).toBe(true)
+    expect(provider.supportedMediaTypes).toEqual([
+      'application/pdf',
+      'image/png',
+      'image/jpeg',
+    ])
+  })
+
   it('refuses to run when unconfigured rather than returning empty readings', async () => {
     const provider = new GeminiExtractionProvider({ ...geminiOptions, apiKey: '' })
 
-    await expect(provider.extract(REQUEST)).rejects.toBeInstanceOf(ExtractionProviderError)
+    await expect(provider.extract(PDF_REQUEST)).rejects.toBeInstanceOf(ExtractionProviderError)
+  })
+
+  it('sends the document itself as inline data, with its media type', async () => {
+    const calls: CapturedCall[] = []
+    const provider = new GeminiExtractionProvider({
+      ...geminiOptions,
+      fetchImpl: transport(
+        () => ({ status: 200, body: geminiEnvelope({ fields: [] }) }),
+        calls,
+      ),
+    })
+
+    await provider.extract(PDF_REQUEST)
+
+    const body = JSON.parse(calls[0]?.body ?? '{}') as {
+      contents: { parts: ({ text?: string } & Record<string, unknown>)[] }[]
+    }
+    const parts = body.contents[0]?.parts ?? []
+    const inline = parts.find((part) => 'inlineData' in part)?.inlineData as
+      | { mimeType: string; data: string }
+      | undefined
+
+    // The document's own bytes are in the request — not merely its title.
+    expect(inline?.mimeType).toBe('application/pdf')
+    expect(inline?.data).toBe(PDF_BYTES.toString('base64'))
+    expect(Buffer.from(inline?.data ?? '', 'base64').equals(PDF_BYTES)).toBe(true)
   })
 
   it('posts the prompt and the key to the model endpoint', async () => {
@@ -106,7 +174,7 @@ describe('GeminiExtractionProvider', () => {
       ),
     })
 
-    await provider.extract(REQUEST)
+    await provider.extract(PDF_REQUEST)
 
     const call = calls[0]
     expect(call?.method).toBe('POST')
@@ -116,6 +184,65 @@ describe('GeminiExtractionProvider', () => {
     expect(call?.headers['x-goog-api-key']).toBe('gemini-test-key')
     expect(call?.body).toContain('khatian, area')
     expect(call?.body).toContain('RS khatian 104')
+    // The instruction tells the reader the document is attached, and that the
+    // metadata is not the document.
+    expect(call?.body).toContain('attached')
+  })
+
+  it('refuses a record with no stored document instead of reading its metadata', async () => {
+    const calls: CapturedCall[] = []
+    const provider = new GeminiExtractionProvider({
+      ...geminiOptions,
+      fetchImpl: transport(
+        () => ({ status: 200, body: geminiEnvelope({ fields: [] }) }),
+        calls,
+      ),
+    })
+
+    const error = await provider.extract(METADATA_ONLY_REQUEST).catch((thrown: unknown) => thrown)
+
+    expect(error).toBeInstanceOf(ExtractionProviderError)
+    expect((error as ExtractionProviderError).retryable).toBe(false)
+    expect((error as ExtractionProviderError).message).toContain('no stored file')
+    // Nothing was sent: a request that cannot be served is never attempted.
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses a media type it does not support, sending nothing', async () => {
+    const calls: CapturedCall[] = []
+    const provider = new GeminiExtractionProvider({
+      ...geminiOptions,
+      fetchImpl: transport(
+        () => ({ status: 200, body: geminiEnvelope({ fields: [] }) }),
+        calls,
+      ),
+    })
+
+    const textRequest = requestWith({
+      mediaType: 'text/plain',
+      bytes: Buffer.from('not a scan'),
+      byteSize: 11,
+      sha256: 'd'.repeat(64),
+      originalFilename: 'notes.txt',
+    })
+
+    await expect(provider.extract(textRequest)).rejects.toThrow(/cannot read text\/plain/)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses a document larger than the inline request limit', async () => {
+    const calls: CapturedCall[] = []
+    const provider = new GeminiExtractionProvider({
+      ...geminiOptions,
+      maxContentBytes: 8,
+      fetchImpl: transport(
+        () => ({ status: 200, body: geminiEnvelope({ fields: [] }) }),
+        calls,
+      ),
+    })
+
+    await expect(provider.extract(PDF_REQUEST)).rejects.toThrow(/larger than the 8 byte limit/)
+    expect(calls).toHaveLength(0)
   })
 
   it('maps readable fields, keeping a reported confidence and location', async () => {
@@ -139,7 +266,7 @@ describe('GeminiExtractionProvider', () => {
       })),
     })
 
-    const result = await provider.extract(REQUEST)
+    const result = await provider.extract(PDF_REQUEST)
     const area = result.fields.find((field) => field.field === 'area')
     const khatian = result.fields.find((field) => field.field === 'khatian')
 
@@ -169,7 +296,7 @@ describe('GeminiExtractionProvider', () => {
       })),
     })
 
-    const result = await provider.extract(REQUEST)
+    const result = await provider.extract(PDF_REQUEST)
     const area = result.fields.find((field) => field.field === 'area')
 
     expect(area?.isUnclear).toBe(true)
@@ -186,7 +313,7 @@ describe('GeminiExtractionProvider', () => {
       })),
     })
 
-    const result = await provider.extract(REQUEST)
+    const result = await provider.extract(PDF_REQUEST)
     expect(result.fields.find((field) => field.field === 'area')?.confidence).toBeNull()
   })
 
@@ -204,7 +331,7 @@ describe('GeminiExtractionProvider', () => {
       })),
     })
 
-    const result = await provider.extract(REQUEST)
+    const result = await provider.extract(PDF_REQUEST)
 
     expect(result.fields.map((field) => field.field)).toEqual(['khatian', 'area'])
     expect(result.warnings.join(' ')).toContain('owner')
@@ -219,12 +346,16 @@ describe('GeminiExtractionProvider', () => {
       })),
     })
 
-    const error = await provider.extract(REQUEST).catch((thrown: unknown) => thrown)
+    const error = await provider.extract(PDF_REQUEST).catch((thrown: unknown) => thrown)
 
     expect(error).toBeInstanceOf(ExtractionProviderError)
     expect((error as ExtractionProviderError).retryable).toBe(true)
     expect((error as ExtractionProviderError).message).toContain('429')
+    // Neither the document we sent nor the body we received is echoed back.
     expect((error as ExtractionProviderError).message).not.toContain('document text')
+    expect((error as ExtractionProviderError).message).not.toContain(
+      PDF_BYTES.toString('base64'),
+    )
   })
 
   it('fails when the provider body is not JSON', async () => {
@@ -233,7 +364,7 @@ describe('GeminiExtractionProvider', () => {
       fetchImpl: transport(() => ({ status: 200, body: '<html>gateway</html>' })),
     })
 
-    await expect(provider.extract(REQUEST)).rejects.toThrow(/not JSON/)
+    await expect(provider.extract(PDF_REQUEST)).rejects.toThrow(/not JSON/)
   })
 
   it('fails when the response has no text part', async () => {
@@ -245,7 +376,7 @@ describe('GeminiExtractionProvider', () => {
       })),
     })
 
-    await expect(provider.extract(REQUEST)).rejects.toThrow(/no text part/)
+    await expect(provider.extract(PDF_REQUEST)).rejects.toThrow(/no text part/)
   })
 
   it('fails when the model payload does not match the expected schema', async () => {
@@ -257,7 +388,7 @@ describe('GeminiExtractionProvider', () => {
       })),
     })
 
-    await expect(provider.extract(REQUEST)).rejects.toThrow(/schema/)
+    await expect(provider.extract(PDF_REQUEST)).rejects.toThrow(/schema/)
   })
 
   it('reports a timeout as retryable rather than as an empty read', async () => {
@@ -269,7 +400,7 @@ describe('GeminiExtractionProvider', () => {
     }
     const provider = new GeminiExtractionProvider({ ...geminiOptions, fetchImpl: aborting })
 
-    const error = await provider.extract(REQUEST).catch((thrown: unknown) => thrown)
+    const error = await provider.extract(PDF_REQUEST).catch((thrown: unknown) => thrown)
 
     expect(error).toBeInstanceOf(ExtractionProviderError)
     expect((error as ExtractionProviderError).retryable).toBe(true)
@@ -278,6 +409,64 @@ describe('GeminiExtractionProvider', () => {
 })
 
 describe('GroqExtractionProvider', () => {
+  it('declares the image types it can read and that it reads content', () => {
+    const provider = new GroqExtractionProvider(groqOptions)
+
+    expect(provider.readsDocumentContent).toBe(true)
+    // No PDF: Groq's vision endpoint takes images, and pretending otherwise
+    // would send a PDF to be answered from the prompt alone.
+    expect(provider.supportedMediaTypes).toEqual(['image/png', 'image/jpeg'])
+  })
+
+  it('sends the image as a base64 data URL with its media type', async () => {
+    const calls: CapturedCall[] = []
+    const provider = new GroqExtractionProvider({
+      ...groqOptions,
+      fetchImpl: transport(
+        () => ({ status: 200, body: groqEnvelope({ fields: [] }) }),
+        calls,
+      ),
+    })
+
+    await provider.extract(IMAGE_REQUEST)
+
+    const body = JSON.parse(calls[0]?.body ?? '{}') as {
+      messages: { content: ({ type: string } & Record<string, unknown>)[] }[]
+    }
+    const image = body.messages[0]?.content.find((part) => part.type === 'image_url')
+    const url = (image?.image_url as { url?: string } | undefined)?.url
+
+    expect(url).toBe(`data:image/png;base64,${PNG_BYTES.toString('base64')}`)
+    expect(Buffer.from((url ?? '').split(',')[1] ?? '', 'base64').equals(PNG_BYTES)).toBe(true)
+  })
+
+  it('refuses a PDF, because it has no document input', async () => {
+    const calls: CapturedCall[] = []
+    const provider = new GroqExtractionProvider({
+      ...groqOptions,
+      fetchImpl: transport(
+        () => ({ status: 200, body: groqEnvelope({ fields: [] }) }),
+        calls,
+      ),
+    })
+
+    const error = await provider.extract(PDF_REQUEST).catch((thrown: unknown) => thrown)
+
+    expect(error).toBeInstanceOf(ExtractionProviderError)
+    expect((error as ExtractionProviderError).retryable).toBe(false)
+    expect((error as ExtractionProviderError).message).toContain('cannot read application/pdf')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses a record with no stored document', async () => {
+    const provider = new GroqExtractionProvider({
+      ...groqOptions,
+      fetchImpl: transport(() => ({ status: 200, body: groqEnvelope({ fields: [] }) })),
+    })
+
+    await expect(provider.extract(METADATA_ONLY_REQUEST)).rejects.toThrow(/no stored file/)
+  })
+
   it('posts an OpenAI-compatible chat completion with a bearer token', async () => {
     const calls: CapturedCall[] = []
     const provider = new GroqExtractionProvider({
@@ -288,7 +477,7 @@ describe('GroqExtractionProvider', () => {
       ),
     })
 
-    const result = await provider.extract(REQUEST)
+    const result = await provider.extract(IMAGE_REQUEST)
 
     expect(calls[0]?.url).toBe('https://api.groq.com/openai/v1/chat/completions')
     expect(calls[0]?.headers['authorization']).toBe('Bearer groq-test-key')
@@ -305,7 +494,7 @@ describe('GroqExtractionProvider', () => {
       })),
     })
 
-    await expect(provider.extract(REQUEST)).rejects.toThrow(/no message content/)
+    await expect(provider.extract(IMAGE_REQUEST)).rejects.toThrow(/no message content/)
   })
 })
 
@@ -323,7 +512,7 @@ describe('FallbackExtractionProvider', () => {
       fetchImpl: transport(() => ({ status: 200, body: groqEnvelope({ fields: [] }) })),
     })
 
-    const result = await new FallbackExtractionProvider([gemini, groq]).extract(REQUEST)
+    const result = await new FallbackExtractionProvider([gemini, groq]).extract(IMAGE_REQUEST)
 
     expect(result.provider).toBe('gemini')
     expect(result.fields[0]?.value).toBe('from-gemini')
@@ -342,10 +531,59 @@ describe('FallbackExtractionProvider', () => {
       })),
     })
 
-    const result = await new FallbackExtractionProvider([gemini, groq]).extract(REQUEST)
+    const result = await new FallbackExtractionProvider([gemini, groq]).extract(IMAGE_REQUEST)
 
     expect(result.provider).toBe('groq')
     expect(result.fields.find((field) => field.field === 'khatian')?.value).toBe('from-groq')
+  })
+
+  it('never sends a document to a provider that cannot read its media type', async () => {
+    const geminiCalls: CapturedCall[] = []
+    const groqCalls: CapturedCall[] = []
+    const gemini = new GeminiExtractionProvider({
+      ...geminiOptions,
+      fetchImpl: transport(() => ({ status: 500, body: 'upstream error' }), geminiCalls),
+    })
+    const groq = new GroqExtractionProvider({
+      ...groqOptions,
+      fetchImpl: transport(() => ({ status: 200, body: groqEnvelope({ fields: [] }) }), groqCalls),
+    })
+
+    // A PDF: only Gemini can read it, and Gemini fails. Groq is skipped rather
+    // than sent a PDF it would answer from the prompt.
+    await expect(
+      new FallbackExtractionProvider([gemini, groq]).extract(PDF_REQUEST),
+    ).rejects.toThrow(/Every compatible provider failed/)
+    expect(geminiCalls).toHaveLength(1)
+    expect(groqCalls).toHaveLength(0)
+  })
+
+  it('names the media type when no configured provider can read it', async () => {
+    // Only Groq is configured, and the document is a PDF it cannot read.
+    const provider = new FallbackExtractionProvider([
+      new GeminiExtractionProvider({ ...geminiOptions, apiKey: '' }),
+      new GroqExtractionProvider({
+        ...groqOptions,
+        fetchImpl: transport(() => ({ status: 200, body: groqEnvelope({ fields: [] }) })),
+      }),
+    ])
+
+    await expect(provider.extract(PDF_REQUEST)).rejects.toThrow(
+      /No configured provider can read application\/pdf/,
+    )
+  })
+
+  it('refuses a metadata-only record when a reader is required', async () => {
+    const gemini = new GeminiExtractionProvider({
+      ...geminiOptions,
+      fetchImpl: transport(() => ({ status: 200, body: geminiEnvelope({ fields: [] }) })),
+    })
+
+    const provider = new FallbackExtractionProvider([gemini])
+    expect(provider.readsDocumentContent).toBe(true)
+    await expect(provider.extract(METADATA_ONLY_REQUEST)).rejects.toThrow(
+      /no stored file/,
+    )
   })
 
   it('fails when every configured provider fails, never reporting a partial read as success', async () => {
@@ -359,7 +597,7 @@ describe('FallbackExtractionProvider', () => {
     })
 
     const provider = new FallbackExtractionProvider([gemini, groq])
-    const error = await provider.extract(REQUEST).catch((thrown: unknown) => thrown)
+    const error = await provider.extract(IMAGE_REQUEST).catch((thrown: unknown) => thrown)
 
     expect(error).toBeInstanceOf(ExtractionProviderError)
     expect((error as ExtractionProviderError).message).toContain('gemini')
@@ -373,6 +611,8 @@ describe('FallbackExtractionProvider', () => {
     ])
 
     expect(provider.isConfigured()).toBe(false)
-    await expect(provider.extract(REQUEST)).rejects.toThrow(/No external extraction provider/)
+    await expect(provider.extract(IMAGE_REQUEST)).rejects.toThrow(
+      /No external extraction provider/,
+    )
   })
 })

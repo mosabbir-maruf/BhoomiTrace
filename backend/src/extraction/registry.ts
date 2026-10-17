@@ -39,6 +39,7 @@ export function createExtractionProvider(
     apiKey: env.GEMINI_API_KEY ?? '',
     model: env.GEMINI_MODEL,
     timeoutMs: env.EXTRACTION_TIMEOUT_MS,
+    maxContentBytes: env.EXTRACTION_MAX_CONTENT_BYTES,
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
   }
 
@@ -46,6 +47,7 @@ export function createExtractionProvider(
     apiKey: env.GROQ_API_KEY ?? '',
     model: env.GROQ_MODEL,
     timeoutMs: env.EXTRACTION_TIMEOUT_MS,
+    maxContentBytes: env.EXTRACTION_MAX_CONTENT_BYTES,
     ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
   }
 
@@ -76,11 +78,16 @@ export function describeProvider(provider: ExtractionProvider): {
   model: string | null
   configured: boolean
   requiresCredentials: boolean
+  /** False for the synthetic test double; true for a reader of stored content. */
+  readsDocumentContent: boolean
+  supportedMediaTypes: readonly string[] | null
 } {
   return {
     name: provider.name,
     model: provider.model,
     configured: provider.isConfigured(),
     requiresCredentials: provider.requiresCredentials,
+    readsDocumentContent: provider.readsDocumentContent,
+    supportedMediaTypes: provider.supportedMediaTypes,
   }
 }

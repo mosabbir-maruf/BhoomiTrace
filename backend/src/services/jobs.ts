@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import type { Database } from '../db/client.js'
 import type {
@@ -9,6 +9,8 @@ import { processingJobs, type ProcessingJob } from '../db/schema/jobs.js'
 import type { User } from '../db/schema/users.js'
 import {
   ConflictError,
+  IdempotencyKeyReusedError,
+  JobLeaseLostError,
   NotFoundError,
   ServiceUnavailableError,
 } from '../lib/errors.js'
@@ -41,6 +43,10 @@ import { AuditActions, recordAuditEvent } from './audit.js'
  *
  * `idempotency_key` makes repeated submissions safe. A second request with the
  * same key gets the job already created rather than a duplicate unit of work.
+ * The key is scoped to the requester, so the promise it makes is "this *caller*
+ * already asked for this" — never "somebody used this key". Two accounts may
+ * choose the same key without seeing each other's job, and a key reused for a
+ * different request is a `409` rather than a wrong answer.
  */
 
 export interface JobView {
@@ -118,27 +124,116 @@ export interface EnqueueJobResult {
 }
 
 /**
- * Records a job, or returns the existing one for the same idempotency key.
+ * A stable text form of a value, for comparing two requests.
  *
- * The insert relies on the partial unique index rather than a read-then-write
- * check, so two simultaneous submissions with the same key cannot both create a
- * job: one insert wins and the other is routed to the existing row.
+ * Object keys are sorted recursively, so a payload that round-tripped through
+ * `jsonb` — which does not preserve key order — still compares equal to the one
+ * that produced it. Array order is preserved, because a list of requested fields
+ * is a list, not a set.
+ */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+
+  return `{${entries
+    .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+    .join(',')}}`
+}
+
+/**
+ * The identity of an enqueueing request: what a key actually stands for.
+ *
+ * A repeated key is only "the same request" when the kind, the target, and the
+ * payload all match. Anything else is a different request reusing a key, which
+ * is a client error rather than a lookup hit.
+ */
+function requestFingerprint(input: EnqueueJobInput): string {
+  return canonicalJson({
+    kind: input.kind,
+    parcelId: input.parcelId ?? null,
+    sourceDocumentId: input.sourceDocumentId ?? null,
+    payload: input.payload ?? null,
+  })
+}
+
+/** Finds the job a caller's key already produced, ignoring other requesters. */
+async function loadJobByIdempotencyKey(
+  executor: Pick<Database['orm'], 'select'>,
+  key: string,
+  requestedBy: string | null,
+): Promise<ProcessingJob | undefined> {
+  const rows = await executor
+    .select()
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.idempotencyKey, key),
+        requestedBy === null
+          ? isNull(processingJobs.requestedBy)
+          : eq(processingJobs.requestedBy, requestedBy),
+      ),
+    )
+    .limit(1)
+
+  return rows[0]
+}
+
+/** Refuses a key that already stands for a different request. */
+function assertKeyHasSameMeaning(
+  existing: ProcessingJob,
+  input: EnqueueJobInput,
+): void {
+  const existingFingerprint = canonicalJson({
+    kind: existing.kind,
+    parcelId: existing.parcelId,
+    sourceDocumentId: existing.sourceDocumentId,
+    payload: existing.payload ?? null,
+  })
+
+  if (existingFingerprint !== requestFingerprint(input)) {
+    throw new IdempotencyKeyReusedError(
+      'That idempotency key was already used for a different request. Use a new key for a new unit of work.',
+      { existingJobId: existing.id },
+    )
+  }
+}
+
+/**
+ * Records a job, or returns the one this caller's key already produced.
+ *
+ * Two properties are load-bearing:
+ *
+ * - **The lookup is scoped to the requester.** The idempotency key is chosen by
+ *   the client, so it cannot be trusted to be globally unique: if the lookup
+ *   ignored the requester, one account could pick a key another account had
+ *   used and be handed that account's job, including its result.
+ * - **The insert, not a read-before-write, is what decides.** The partial unique
+ *   index is scoped to the requester, so two simultaneous submissions by the
+ *   same caller cannot both create a job, and two callers using the same key
+ *   never conflict with each other at all.
  */
 export async function enqueueJob(
   database: Database,
   input: EnqueueJobInput,
 ): Promise<EnqueueJobResult> {
-  return database.orm.transaction(async (tx) => {
-    if (input.idempotencyKey !== null && input.idempotencyKey !== undefined) {
-      const existing = await tx
-        .select()
-        .from(processingJobs)
-        .where(eq(processingJobs.idempotencyKey, input.idempotencyKey))
-        .limit(1)
+  const idempotencyKey = input.idempotencyKey ?? null
 
-      const found = existing[0]
-      if (found !== undefined) {
-        return { job: toJobView(found), created: false }
+  return database.orm.transaction(async (tx) => {
+    // A read first only to answer quickly and to name the mismatch clearly; it
+    // is not what makes the operation safe.
+    if (idempotencyKey !== null) {
+      const existing = await loadJobByIdempotencyKey(
+        tx,
+        idempotencyKey,
+        input.requestedBy,
+      )
+      if (existing !== undefined) {
+        assertKeyHasSameMeaning(existing, input)
+        return { job: toJobView(existing), created: false }
       }
     }
 
@@ -150,34 +245,38 @@ export async function enqueueJob(
         parcelId: input.parcelId ?? null,
         sourceDocumentId: input.sourceDocumentId ?? null,
         requestedBy: input.requestedBy,
-        idempotencyKey: input.idempotencyKey ?? null,
+        idempotencyKey,
         payload: input.payload ?? null,
         maxAttempts: input.maxAttempts,
       })
-      .onConflictDoNothing({
-        target: processingJobs.idempotencyKey,
-        // The unique index is partial, so its predicate has to be repeated here
-        // for PostgreSQL to infer the arbiter index from the conflict target.
-        where: sql`${processingJobs.idempotencyKey} is not null`,
-      })
+      // No conflict target: either partial unique index may be the one that
+      // fires, and naming one of them would make the other a hard error.
+      .onConflictDoNothing()
       .returning()
 
     const job = inserted[0]
     if (job === undefined) {
-      // Lost a race with a concurrent submission that used the same key.
-      const existing = await tx
-        .select()
-        .from(processingJobs)
-        .where(eq(processingJobs.idempotencyKey, input.idempotencyKey ?? ''))
-        .limit(1)
-
-      const found = existing[0]
-      if (found === undefined) {
+      // Lost a race with a concurrent submission by the *same* caller. The other
+      // transaction has committed by the time this statement returns, so the row
+      // is visible here.
+      if (idempotencyKey === null) {
         throw new ServiceUnavailableError(
           'The work item could not be recorded. Try again.',
         )
       }
-      return { job: toJobView(found), created: false }
+
+      const existing = await loadJobByIdempotencyKey(
+        tx,
+        idempotencyKey,
+        input.requestedBy,
+      )
+      if (existing === undefined) {
+        throw new ServiceUnavailableError(
+          'The work item could not be recorded. Try again.',
+        )
+      }
+      assertKeyHasSameMeaning(existing, input)
+      return { job: toJobView(existing), created: false }
     }
 
     await recordAuditEvent(tx, {
@@ -279,6 +378,85 @@ export async function claimNextJob(
   }
 }
 
+/** Identifies the worker holding a job, as a token to fence writes on. */
+export interface JobFence {
+  jobId: string
+  workerId: string
+}
+
+/**
+ * Renews the lease on a job this worker still holds.
+ *
+ * Long work outlives a fixed lease: a provider call, or a slow queue, can exceed
+ * `WORKER_LEASE_SECONDS` while the worker is still alive and healthy. Without
+ * renewal the lease would expire and a second worker would start the same job,
+ * which is how one unit of work ends up with two sets of side effects.
+ *
+ * The update is guarded on the same three facts that make a claim valid — the
+ * job identifier, this worker's identifier, and the `processing` state — so a
+ * worker that has already lost the job cannot renew it back into existence.
+ *
+ * @returns `false` when the lease is no longer held, which the caller must treat
+ *   as "stop working on this job", not as a transient error.
+ */
+export async function renewJobLease(
+  database: Database,
+  options: { jobId: string; workerId: string; leaseSeconds: number },
+): Promise<boolean> {
+  const result = await database.orm.execute(sql`
+    update processing_jobs
+    set leased_until = now() + (${options.leaseSeconds} * interval '1 second'),
+        updated_at = now()
+    where id = ${options.jobId}::uuid
+      and locked_by = ${options.workerId}
+      and status = 'processing'
+    returning id
+  `)
+
+  return result.rows.length > 0
+}
+
+/** Minimal executor surface the fence check needs. */
+export type JobFenceExecutor = Pick<Database['orm'], 'select'>
+
+/**
+ * Verifies the worker still holds the job, at the moment side effects commit.
+ *
+ * This is the fence. Checking only in `completeJob()` is too late: by then the
+ * extraction rows, findings, or report the stale worker produced have already
+ * been written, and a second worker produces its own. Calling this as the first
+ * statement inside the same transaction as those writes makes the ownership
+ * check and the writes one atomic decision — if the job has moved on, the whole
+ * transaction rolls back and nothing is duplicated.
+ *
+ * `FOR UPDATE` is deliberate. It takes the job row's lock, so a concurrent
+ * recovery or re-claim either happens strictly before this check (and fails it)
+ * or strictly after this transaction commits (and sees the result).
+ */
+export async function assertJobLeaseHeld(
+  executor: JobFenceExecutor,
+  fence: JobFence,
+): Promise<void> {
+  const rows = await executor
+    .select({ id: processingJobs.id })
+    .from(processingJobs)
+    .where(
+      and(
+        eq(processingJobs.id, fence.jobId),
+        eq(processingJobs.lockedBy, fence.workerId),
+        eq(processingJobs.status, 'processing'),
+      ),
+    )
+    .limit(1)
+    .for('update')
+
+  if (rows[0] === undefined) {
+    throw new JobLeaseLostError(
+      'This job is no longer held by this worker, so its results were discarded.',
+    )
+  }
+}
+
 /** Loads a job only if the worker still holds its lease. */
 async function updateHeldJob(
   database: Database,
@@ -307,7 +485,7 @@ async function updateHeldJob(
 
   const job = updated[0]
   if (job === undefined) {
-    throw new ConflictError(
+    throw new JobLeaseLostError(
       'This job is no longer held by this worker, so its result was not recorded.',
     )
   }
@@ -411,7 +589,7 @@ export async function failJobAttempt(
     throw new NotFoundError('No job exists with that identifier.')
   }
   if (job.status !== 'processing' || job.lockedBy !== options.workerId) {
-    throw new ConflictError(
+    throw new JobLeaseLostError(
       'This job is no longer held by this worker, so its failure was not recorded.',
     )
   }
@@ -447,7 +625,7 @@ export async function failJobAttempt(
 
   const row = updated[0]
   if (row === undefined) {
-    throw new ConflictError('The job failure could not be recorded.')
+    throw new JobLeaseLostError('The job failure could not be recorded.')
   }
 
   await recordAuditEvent(database.orm, {

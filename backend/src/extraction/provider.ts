@@ -21,9 +21,14 @@ import type { BoundingBox } from '../db/schema/types.js'
  * 3. **Provenance is reported, not guessed.** A page number or bounding box is
  *    present only when the provider supplied it. A provider that did not
  *    measure a region returns `null`, and nothing downstream invents one.
+ * 4. **A reading comes from the document.** A provider that reads content is
+ *    handed the stored bytes and refuses a request without them. Metadata — a
+ *    title, a reference, a page count — is never enough to produce a value, so
+ *    there is no path from "we hold no copy of this document" to "here is what
+ *    it says".
  */
 
-/** What a provider is asked to read. Contains no document contents. */
+/** What a provider is asked to read. */
 export interface ExtractionRequest {
   sourceDocumentId: string
   title: string
@@ -31,6 +36,32 @@ export interface ExtractionRequest {
   pageCount: number | null
   /** Fields to look for. A provider returns exactly these, or marks them unclear. */
   fields: readonly ExtractionField[]
+  /**
+   * The stored document itself, when one exists.
+   *
+   * `null` means the record is metadata only — it describes a document the
+   * platform does not hold a copy of. A provider that reads document content
+   * must refuse such a request rather than answering from the metadata: a
+   * plausible value invented from a title is an unsupported record, not a
+   * reading. Only a provider that declares `readsDocumentContent === false` may
+   * run without content, and that declaration is what marks it as synthetic.
+   *
+   * The bytes are loaded from private storage by the worker and are never placed
+   * in a job payload, a log line, or an audit row.
+   */
+  content: ExtractionSourceContent | null
+}
+
+/** The stored bytes of a document, and the facts needed to send them. */
+export interface ExtractionSourceContent {
+  /** Sniffed media type, e.g. `application/pdf`. Never the client's claim. */
+  mediaType: string
+  bytes: Uint8Array
+  byteSize: number
+  /** SHA-256 of the stored file, verified against the record when loaded. */
+  sha256: string
+  /** The name the uploader gave it, for the provider's benefit only. */
+  originalFilename: string | null
 }
 
 export interface ExtractedField {
@@ -67,9 +98,71 @@ export interface ExtractionProvider {
   readonly model: string | null
   /** True when the provider cannot work without credentials. */
   readonly requiresCredentials: boolean
+  /**
+   * Whether this provider actually reads the document.
+   *
+   * `true` for a real reader: its readings come from the bytes it was given, so
+   * it refuses a request with no content and never answers from metadata. `false`
+   * for a synthetic double, whose readings are fixtures and whose output must be
+   * presented as such. Nothing downstream treats the two the same: the
+   * distinction is recorded on the job result and in the startup log.
+   */
+  readonly readsDocumentContent: boolean
+  /**
+   * Media types the provider can read, or `null` when it does not read content.
+   *
+   * A provider that reads content lists exactly what it supports; a request for
+   * anything else is refused rather than sent, so a PDF is never posted to an
+   * image-only model that would answer from the prompt text alone.
+   */
+  readonly supportedMediaTypes: readonly string[] | null
   /** True when this provider can be used with the current configuration. */
   isConfigured(): boolean
   extract(request: ExtractionRequest): Promise<ExtractionResult>
+}
+
+/**
+ * Checks that a provider is able to read a request, before it is called.
+ *
+ * Shared by the adapters and by the worker so both agree on one rule: a provider
+ * that reads content must be given content of a type it supports, and a
+ * metadata-only request is never answered from metadata.
+ *
+ * @throws {ExtractionProviderError} when the provider cannot read the request.
+ */
+export function assertProviderCanRead(
+  provider: Pick<ExtractionProvider, 'name' | 'readsDocumentContent' | 'supportedMediaTypes'>,
+  request: ExtractionRequest,
+): void {
+  if (!provider.readsDocumentContent) return
+
+  if (request.content === null) {
+    throw new ExtractionProviderError(
+      provider.name,
+      'The document has no stored file, so there is nothing for this provider to read.',
+      false,
+    )
+  }
+
+  const supported = provider.supportedMediaTypes
+  if (supported !== null && !supported.includes(request.content.mediaType)) {
+    throw new ExtractionProviderError(
+      provider.name,
+      `This provider cannot read ${request.content.mediaType}. It supports ${supported.join(', ')}.`,
+      false,
+    )
+  }
+}
+
+/** True when the provider would accept the request, used for routing. */
+export function providerCanRead(
+  provider: Pick<ExtractionProvider, 'readsDocumentContent' | 'supportedMediaTypes'>,
+  request: ExtractionRequest,
+): boolean {
+  if (!provider.readsDocumentContent) return true
+  if (request.content === null) return false
+  const supported = provider.supportedMediaTypes
+  return supported === null || supported.includes(request.content.mediaType)
 }
 
 /** Raised when a provider is asked to do work it is not configured for. */

@@ -20,6 +20,10 @@ import { ExtractionWorker } from './runner.js'
  * The provider comes from validated configuration. With the default
  * `EXTRACTION_PROVIDER=mock` this runs with no credentials and no network
  * access, which is how the whole pipeline is exercised in development and tests.
+ *
+ * `main.ts` in this directory is the process entry point wired to the `worker`
+ * npm script and to the build; this module is kept as a thin alternative start
+ * used in development. Both construct the same worker with the same options.
  */
 
 loadEnvFile()
@@ -41,6 +45,8 @@ const worker = new ExtractionWorker({
   maxAttempts: env.WORKER_MAX_ATTEMPTS,
   retryBackoffSeconds: env.WORKER_RETRY_BACKOFF_SECONDS,
   pollIntervalMs: env.WORKER_POLL_INTERVAL_MS,
+  uploadDir: env.UPLOAD_DIR,
+  maxContentBytes: env.EXTRACTION_MAX_CONTENT_BYTES,
   log,
 })
 

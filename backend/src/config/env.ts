@@ -53,6 +53,21 @@ function splitCommaSeparated(value: string): string[] {
 const DEFAULT_DEVELOPMENT_ORIGINS =
   'http://localhost:5173,http://127.0.0.1:5173'
 
+/**
+ * Model identifiers known to be text-only.
+ *
+ * A text-only model cannot read an image or a PDF, so pointing an extraction
+ * reader at one would produce values derived from the prompt rather than the
+ * document. This is a deny-list of the values seen in practice, not a model
+ * registry: the guard is here to catch a known-bad value with a clear message,
+ * and the real protection is that a reader is handed the document and must
+ * refuse a request it cannot serve.
+ */
+const TEXT_ONLY_MODELS = new Set([
+  // The default before Phase 2 review: a text-only Groq model.
+  'openai/gpt-oss-20b',
+])
+
 export const environmentSchema = z
   .object({
     NODE_ENV: z
@@ -173,7 +188,27 @@ export const environmentSchema = z
     GEMINI_MODEL: z.string().min(1).default('gemini-2.5-flash'),
 
     GROQ_API_KEY: z.string().min(1).optional(),
-    GROQ_MODEL: z.string().min(1).default('openai/gpt-oss-20b'),
+    /**
+     * Groq's reader is a vision model, because that is the only kind that can
+     * look at a document. The default is the vision model Groq documents for
+     * image input; a text-only model would be sent an image it cannot see and
+     * would answer from the prompt alone, which is not a reading.
+     */
+    GROQ_MODEL: z.string().min(1).default('qwen/qwen3.8-27b'),
+
+    /**
+     * Largest document sent inline to an external reader.
+     *
+     * Both vendors document an inline request ceiling of about 20 MB, so that is
+     * the maximum accepted here. It must be at least `UPLOAD_MAX_BYTES`, or a
+     * file the platform accepted could not be read back.
+     */
+    EXTRACTION_MAX_CONTENT_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .max(20 * 1024 * 1024)
+      .default(5 * 1024 * 1024),
 
     // -----------------------------------------------------------------------
     // Background worker
@@ -261,6 +296,31 @@ export const environmentSchema = z
         message: 'is required when EXTRACTION_PROVIDER is groq',
       })
     }
+
+    // A text-only model cannot read a document. Sending it an image produces an
+    // answer derived from the prompt, which would be stored as though it were a
+    // reading. The values below are known text-only models; configuration names
+    // a vision model instead.
+    for (const [path, model] of [
+      ['GROQ_MODEL', value.GROQ_MODEL],
+    ] as const) {
+      if (TEXT_ONLY_MODELS.has(model)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [path],
+          message: `"${model}" cannot read documents. Configure a vision-capable model, such as qwen/qwen3.8-27b.`,
+        })
+      }
+    }
+
+    if (value.EXTRACTION_MAX_CONTENT_BYTES < value.UPLOAD_MAX_BYTES) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EXTRACTION_MAX_CONTENT_BYTES'],
+        message:
+          'must be at least UPLOAD_MAX_BYTES, or an accepted upload would be too large to read',
+      })
+    }
   })
 
 export type Environment = z.infer<typeof environmentSchema>
@@ -336,10 +396,36 @@ export function describeEnvironment(env: Environment): Record<string, unknown> {
     uploadDir: env.UPLOAD_DIR,
     uploadMaxBytes: env.UPLOAD_MAX_BYTES,
     extractionProvider: env.EXTRACTION_PROVIDER,
+    extractionMaxContentBytes: env.EXTRACTION_MAX_CONTENT_BYTES,
     // Presence only — never the value.
     geminiConfigured: env.GEMINI_API_KEY !== undefined,
     groqConfigured: env.GROQ_API_KEY !== undefined,
     workerLeaseSeconds: env.WORKER_LEASE_SECONDS,
     workerMaxAttempts: env.WORKER_MAX_ATTEMPTS,
   }
+}
+
+/**
+ * Advisory notes about the worker's timing configuration.
+ *
+ * A lease shorter than the provider timeout is *safe* now that a running job
+ * renews its lease, so this is a note rather than a refusal. It is still worth
+ * saying out loud: a lease that expires mid-read means a crash is recovered
+ * sooner than the read could have finished, and an operator should know they
+ * chose that.
+ *
+ * There is deliberately no note about the content ceiling versus the upload
+ * ceiling: that relationship is enforced by the schema, so a configuration where
+ * it fails never gets this far.
+ */
+export function workerConfigurationNotes(env: Environment): string[] {
+  const notes: string[] = []
+
+  if (env.EXTRACTION_TIMEOUT_MS > env.WORKER_LEASE_SECONDS * 1_000) {
+    notes.push(
+      `EXTRACTION_TIMEOUT_MS (${env.EXTRACTION_TIMEOUT_MS}ms) is longer than WORKER_LEASE_SECONDS (${env.WORKER_LEASE_SECONDS}s). This is safe while the worker renews its lease, and it means a crashed worker is recovered before its read could have finished.`,
+    )
+  }
+
+  return notes
 }

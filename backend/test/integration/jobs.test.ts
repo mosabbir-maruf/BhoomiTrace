@@ -128,6 +128,9 @@ async function runWorkerUntilSettled(
     maxAttempts: options.maxAttempts ?? 3,
     retryBackoffSeconds: options.retryBackoffSeconds ?? 0,
     pollIntervalMs: 20,
+    // Readers are handed the file from the test's private storage directory.
+    uploadDir: api.uploadDir,
+    maxContentBytes: 5 * 1024 * 1024,
     log: silentLogger,
   })
 
@@ -182,6 +185,8 @@ function scopedProvider(
     name: inner.name,
     model: inner.model,
     requiresCredentials: inner.requiresCredentials,
+    readsDocumentContent: inner.readsDocumentContent,
+    supportedMediaTypes: inner.supportedMediaTypes,
     isConfigured: () => inner.isConfigured(),
     extract: async (request) => {
       if (request.sourceDocumentId === documentId) calls += 1

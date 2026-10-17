@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdir, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { basename, resolve, sep } from 'node:path'
 import type { Readable } from 'node:stream'
 import { Transform } from 'node:stream'
@@ -218,6 +218,87 @@ export async function storeUploadedStream(
 /** Opens a stored file for reading. Callers must authorise before streaming. */
 export function openStoredFile(uploadDir: string, storageKey: string): Readable {
   return createReadStream(resolveStoragePath(uploadDir, storageKey))
+}
+
+/** Why a stored file could not be handed to a reader. */
+export type StoredFileFailure = 'missing' | 'too_large' | 'checksum_mismatch'
+
+/** Raised when a stored file cannot be read safely. Never carries file bytes. */
+export class StoredFileError extends Error {
+  override readonly name = 'StoredFileError'
+
+  constructor(
+    readonly reason: StoredFileFailure,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+export interface LoadStoredFileOptions {
+  /** Refuses a file larger than this rather than buffering it. */
+  maxBytes: number
+  /**
+   * Digest the record claims for this file. When present it must match, so a
+   * corrupted or substituted file is never sent to an external reader as if it
+   * were the document on record.
+   */
+  expectedSha256?: string | null
+}
+
+/**
+ * Reads a stored file whole and verifies it.
+ *
+ * Bounded on purpose: the size is checked before the file is read, so a file
+ * that grew behind the record's back cannot make this allocate without limit.
+ * The path is derived from the record's storage key through
+ * `resolveStoragePath`, so a path can never come from a caller.
+ *
+ * This buffers the file, which is acceptable because uploads are already capped
+ * at a few megabytes by `UPLOAD_MAX_BYTES`. A larger limit would need streaming
+ * into the provider request instead.
+ */
+export async function readStoredFile(
+  uploadDir: string,
+  storageKey: string,
+  options: LoadStoredFileOptions,
+): Promise<{ bytes: Buffer; byteSize: number; sha256: string }> {
+  const path = resolveStoragePath(uploadDir, storageKey)
+
+  let size: number
+  try {
+    const info = await stat(path)
+    if (!info.isFile()) {
+      throw new StoredFileError('missing', 'The stored file is not a regular file.')
+    }
+    size = info.size
+  } catch (error) {
+    if (error instanceof StoredFileError) throw error
+    throw new StoredFileError('missing', 'The stored file could not be found.')
+  }
+
+  if (size > options.maxBytes) {
+    throw new StoredFileError(
+      'too_large',
+      `The stored file is larger than the ${options.maxBytes} byte limit for extraction.`,
+    )
+  }
+
+  const bytes = await readFile(path)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+
+  if (
+    options.expectedSha256 !== undefined &&
+    options.expectedSha256 !== null &&
+    options.expectedSha256 !== sha256
+  ) {
+    throw new StoredFileError(
+      'checksum_mismatch',
+      'The stored file does not match the checksum recorded for it.',
+    )
+  }
+
+  return { bytes, byteSize: bytes.byteLength, sha256 }
 }
 
 /** Returns the stored size, or `null` when the file is missing. */

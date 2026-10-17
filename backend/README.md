@@ -161,17 +161,33 @@ outright, not merely hidden from the browser.
 | `POST /extractions/:extractionId/review` | Confirm or correct a reading. |
 | `GET /extractions/:extractionId/decisions` | Its decision history. |
 | `GET /findings/:findingId` | One finding. |
-| `POST /findings/:findingId/review` | Resolve or dismiss a finding, with a reason. |
+| `POST /findings/:findingId/review` | Record an action on a finding (`under_review`, `resolved`, `dismissed`), with a reason. |
 | `GET /findings/:findingId/decisions` | Its decision history. |
 | `GET /parcels/:parcelId/readiness` | Past readiness reports for a record. |
 | `GET /parcels/:parcelId/readiness/latest` | The most recent one. |
 | `POST /parcels/:parcelId/readiness` | Generate one now. |
 | `GET /readiness-reports/:reportId` | One report, with its checklist. |
 | `GET /jobs` | Background work you can see. |
-| `POST /jobs` | Queue work (idempotent on `idempotencyKey`). |
+| `POST /jobs` | Queue work; idempotent per requester on `idempotencyKey`. |
 | `GET /jobs/:jobId` | One job, including its result. |
 | `POST /jobs/:jobId/cancel` | Cancel work that has not been claimed. |
 | `GET /audit-events` | The audit trail (administrators only). |
+
+### Applications
+
+An application is a filing a person makes in this system: a request that is
+tracked through a set of states. It is **not** a government decision and nothing
+in it confers, transfers, or confirms any right in land — see
+[Applications](#applications-1) below for what these states are and the product
+decisions still open.
+
+| Route | Purpose |
+| ----- | ------- |
+| `GET /applications` | List filings: an applicant sees their own, a reviewer or admin sees all. |
+| `POST /applications` | File an application as a **draft**. A reviewer may not file; an admin may file for somebody else with `ownerId`. |
+| `GET /applications/:applicationId` | One filing, with its `timeline` (read from the audit trail) and the server's `today`. |
+| `PATCH /applications/:applicationId` | Edit a draft (requires the current `version`). An applicant may edit only their own draft; a reviewer may not rewrite a filing. |
+| `POST /applications/:applicationId/transitions` | Ask for one transition from the workflow. A status is never set directly. |
 
 ### Health
 
@@ -186,6 +202,9 @@ outright, not merely hidden from the browser.
 | --- | --- | --- | --- |
 | See a parcel | only their own | all | all |
 | File / edit a parcel | own only | **no** (record a decision instead) | any, on behalf of an applicant |
+| See an application | only their own | all | all |
+| File / edit an application | own only, and only while a draft | **no** (record a decision instead) | any |
+| Move an application forward | submit their own draft; answer a document request | review steps | any step |
 | Record a hand-read value | own parcels | own parcels | any |
 | Confirm or correct a reading | no | yes | yes |
 | Resolve or dismiss a finding | no | yes | yes |
@@ -227,6 +246,9 @@ Failures use one envelope, and the `code` is a stable vocabulary, not a sentence
 | `conflict` | 409 | The request contradicts current state. |
 | `concurrent_modification` | 409 | The record changed since you loaded it. |
 | `reference_conflict` | 409 | The change would disconnect data that is still referenced. |
+| `idempotency_key_reused` | 409 | The key already stands for a different unit of work; `details.existingJobId` names it. |
+| `job_lease_lost` | 409 | The worker no longer holds the job it was working on, so its result was not recorded. |
+| `invalid_transition` | 409 | That status change is not available from the state the record is in. |
 | `constraint_violation` | 422 | The values are not valid for that record. |
 | `payload_too_large` | 413 | Over the size limit. |
 | `unsupported_media_type` | 415 | That body type is not accepted. |
@@ -306,11 +328,56 @@ review on the same object appends another decision.
 - Reviewing a reading records `confirmed` (the value stands) or `corrected`
   (with the value you accepted). `recorded_value` is **never** overwritten: what
   the document said and what a person decided are separate columns.
-- Resolving or dismissing a finding requires a reason, and records both outcomes
-  as `verified` in the decision history, with the before and after state in the
-  audit trail.
+- Reviewing a finding records the action the reviewer took — `under_review`,
+  `resolved`, or `dismissed` — in `review_decisions.finding_action`, alongside an
+  outcome that agrees with it (`needs_review`, `verified`, or `dismissed`). The
+  action is stored rather than inferred, so a dismissal is never read as a
+  confirmation: resolving says the discrepancy is real, dismissing says it is not.
+  Resolving or dismissing requires a reason.
 - A condition that comes back after being settled raises a **new** finding. The
   settled one keeps its decision.
+
+## Applications
+
+An application is a **tracker entry**: a person says they want something done, and
+the system records what they said and which state the request is in. The states
+are this system's own vocabulary — `draft`, `submitted`, `under_review`,
+`documents_required`, `hearing_scheduled`, `approved`, `rejected` — and an
+`approved` application means only that a reviewer in this system moved it to that
+state. It is **not** a government approval, and it confers no right in land.
+
+- A filing is created as a **draft**. A reviewer cannot file; an applicant files
+  for themselves, and an admin may name an `ownerId` to file on behalf of an
+  account. For any other role an `ownerId` in the body is ignored, and the filing
+  belongs to the caller.
+- A draft belongs to its applicant: only they (or an admin) may edit it, and an
+  applicant may edit it only while it is still a draft. A reviewer can read every
+  filing but never rewrite one.
+- A **tracking number** (`BT-<year>-<5 digits>`) is assigned on submission, drawn
+  from a database sequence, and never reissued. It exists only once the filing is
+  no longer a draft.
+- A status is never set by a client. The caller asks for a transition, and the
+  service checks that the transition exists **from the state the row is actually
+  in** and that the caller's role may perform it; anything else is
+  `invalid_transition`. Every transition carries the `version` the caller read, so
+  one step cannot be applied twice.
+- A rejection requires a `note`, kept as `decisionNote`. A request for documents
+  carries `nextStep` and a `deadline`; both are cleared when the applicant
+  responds.
+- The `timeline` in `GET /applications/:applicationId` is read from the audit
+  trail, so it shows what actually happened, in order, and cannot be edited.
+- A `parcelId`, when given, is checked for visibility to the filing's **owner**,
+  not to whoever typed it.
+
+**An unresolved product decision.** The state names and the transitions between
+them are a plausible demo workflow, not a statutory or official one. Which
+authority may move an application between which states, what each state legally
+signifies, the official Bengali wording and document checklist for each state, and
+whether a withdrawn application should be deleted or retained are all open
+questions that this module does not answer on its own. Until they are settled with
+a domain owner, **this module is a tracking record only**: it invents no legal
+meaning and claims no official workflow. The declared-document codes are likewise
+a closed demo list (`deed`, `id`, `khatian`, `tax`, `heir`).
 
 ## Background work
 
@@ -320,13 +387,29 @@ process claims it (`FOR UPDATE SKIP LOCKED`, so several workers can share the
 queue without coordinating), does the work outside any transaction, and writes
 the result.
 
-- **Leases, not locks.** A claim is a lease. If a worker dies mid-job, the lease
-  expires and the job is recovered and retried rather than stranded.
+- **Leases, not locks.** A claim is a **renewed** lease. A running job extends its
+  lease as it works (`renewJobLease`, guarded on the job id **and** the worker id
+  **and** the `processing` state, so a stale or foreign worker cannot keep a job
+  alive), which means a slow job is not stolen from a healthy worker merely
+  because it is slow. If a worker dies mid-job, it stops renewing, the lease
+  expires, and the job is recovered and retried rather than stranded.
+- **Side effects are fenced.** Every write a worker makes happens in a transaction
+  whose first statement re-checks that this worker still holds the job
+  (`assertJobLeaseHeld`, under `FOR UPDATE`). A worker whose lease was taken away
+  while it was reading writes **nothing** — the whole transaction rolls back and
+  the attempt ends `job_lease_lost` — so two workers can never leave two competing
+  sets of readings for one job.
 - **A bounded number of attempts.** A job that keeps failing is retried with a
   doubling delay up to `WORKER_MAX_ATTEMPTS`, then marked failed with a reason —
   a sanitised one, never a stack trace.
-- **Idempotent enqueue.** A repeated `idempotencyKey` returns the existing job
-  (`200`) instead of creating a second one (`202`).
+- **Idempotent enqueue, scoped to the requester.** An `idempotencyKey` is a
+  client's own label, so it is unique **per requester**, not globally: two
+  accounts may use the same key and each gets their own job, and neither is ever
+  handed the other's. A repeat that means the same thing returns the existing job
+  (`200`) instead of creating a second one (`202`); a repeat that means something
+  different is refused with `idempotency_key_reused`. The uniqueness is a partial
+  unique index on `(requested_by, idempotency_key)`, not a read-then-insert, so it
+  holds under real concurrency.
 - **Unreadable output is an outcome, not a failure.** A job whose readings are
   unclear ends `review_required`: a person is needed, and that is a normal result.
 - Audit rows written by the worker name the subsystem, not a person. Rows for a
@@ -342,18 +425,44 @@ that you are running the test double — the worker says so at `error` level if
 
 ### Extraction providers
 
-| `EXTRACTION_PROVIDER` | What it does |
-| --------------------- | ------------ |
-| `mock` (default) | A deterministic test double. Not a reader: it returns only fixtures it was constructed with and marks every other field unclear, with `confidence: null`. |
-| `gemini` | Google Gemini, via `GEMINI_API_KEY`. |
-| `groq` | Groq, via `GROQ_API_KEY`. |
-| `auto` | Gemini first, Groq as fallback. |
+| `EXTRACTION_PROVIDER` | What it does | What it can read |
+| --------------------- | ------------ | ---------------- |
+| `mock` (default) | A deterministic test double. Not a reader: it returns only fixtures it was constructed with and marks every other field unclear, with `confidence: null`. | nothing — `readsDocumentContent` is `false` |
+| `gemini` | Google Gemini, via `GEMINI_API_KEY`. | PDF, PNG, JPEG |
+| `groq` | Groq, via `GROQ_API_KEY`. | PNG, JPEG (it has no document input, so a PDF is refused) |
+| `auto` | Gemini first, Groq as fallback. | the union of the members it was built from |
+
+**A reader is handed the document itself.** A provider that reports
+`readsDocumentContent: true` is given the stored bytes, with the media type that
+was **sniffed** from the file (not the type a client claimed), the byte size, and
+the SHA-256 the platform recorded. The worker loads the file from private storage
+through a validated path — never from a path supplied in a request, and never as
+binary inside a job payload. A record with no stored file, an unsupported media
+type, a missing file, or a file whose checksum no longer matches the record is
+**refused**: the job fails and stores nothing, rather than answering from the
+document's metadata. The mock double declares `readsDocumentContent: false`, and
+every job result records whether content was read and whether a stored file was
+present, so fixture output can never be mistaken for a reading.
+
+`EXTRACTION_MAX_CONTENT_BYTES` bounds what is sent inline (default 5 MiB, and it
+must be at least `UPLOAD_MAX_BYTES` or a file the platform accepted could not be
+read back).
+
+`GROQ_MODEL` must be a **vision-capable** model — the default is
+`qwen/qwen3.8-27b`. A known text-only value (such as the previous default
+`openai/gpt-oss-20b`) is refused at startup with an actionable message, because a
+text-only model would answer from the prompt and that answer would be stored as
+though it were a reading.
 
 **No live call to an external model has been made from this repository.** The
 external adapters are behind an injectable interface and covered by unit tests
-with a fake transport; their request and response handling has not been run
-against the real services, and the default model names in `.env.example` should
-be checked before use. The mock provider is what every integration test uses.
+with a fake transport that asserts the exact bytes and media type sent, plus
+integration tests that drive the real worker against a content-reading provider
+and assert on the request it received; their request and response handling has
+not been run against the real services, and the default model names in
+`.env.example` should be checked before use. Whether a given account's model
+accepts a given file is therefore **unverified**. The mock provider is what every
+other integration test uses.
 
 ## Layout
 
@@ -455,12 +564,23 @@ These behaviours are covered by `test/integration/deletion-policy.test.ts` and
 ### Migrations
 
 The SQL is committed under `drizzle/`; migrations are never edited after being
-applied to a shared database. `npm run db:seed` is idempotent: it inserts with
-fixed identifiers, and it also performs one narrowly scoped repair so that a
-database seeded before a fixture wording correction converges in place, without
-resetting the volume. The repair is limited to the single fixed synthetic finding
-id and only matches rows that still contain the superseded sentence, so it can
-never overwrite an edited row.
+applied to a shared database. Migrations are **additive**: later ones add tables,
+columns, enums, and indexes rather than rewriting the ones before them, and an
+`ALTER TYPE ... ADD VALUE` is only ever used where the new value is not *used* in
+the same migration. The scoped idempotency-key indexes (`0009`) replace a single
+global unique index that could not tell two requesters apart; the migration drops
+that index and creates the two narrower ones in its place, which changes no rows.
+The `review_decisions.finding_action` column added in the same migration is
+nullable on purpose: the append-only guard trigger rejects `UPDATE`, so a legacy
+decision cannot be backfilled and instead reports `findingAction: null`. The
+applications tables and their tracking-number sequence arrive in `0010` and
+`0011`.
+
+`npm run db:seed` is idempotent: it inserts with fixed identifiers, and it also
+performs one narrowly scoped repair so that a database seeded before a fixture
+wording correction converges in place, without resetting the volume. The repair is
+limited to the single fixed synthetic finding id and only matches rows that still
+contain the superseded sentence, so it can never overwrite an edited row.
 
 ## Known limitations
 
@@ -469,8 +589,12 @@ Recorded honestly, because each of these is a real gap rather than a detail.
 - **No OCR.** No Tesseract or other native OCR package is installed. Reading a
   document depends entirely on the configured provider, and the default provider
   is a deterministic double. Local OCR adapters would be optional additions.
-- **External readers are unverified.** The Gemini and Groq adapters are unit
-  tested against a fake transport only. No live request has been made.
+- **External readers are unverified.** The Gemini and Groq adapters are unit tested
+  against a fake transport that asserts the exact bytes and media type sent, and
+  the worker's content path is integration tested against a content-reading
+  provider. No **live** request has been made, so whether an account's model
+  accepts a given file, and how each vendor reports a malformed response in
+  practice, remain unverified.
 - **No account lockout.** Brute-force resistance is the rate limit plus Argon2id
   cost, not a lockout counter. A deliberate choice for now, not a guarantee.
 - **`areaDecimal` is returned as a string.** The backend always returns exact
@@ -482,8 +606,20 @@ Recorded honestly, because each of these is a real gap rather than a detail.
 - **The download route is absent from the OpenAPI document's `200` body.** It
   streams a file rather than JSON, so the generated document declares its failure
   responses only. The document is still generated for every other route.
-- **No `applications` module.** The frontend's `Application*` types have no
-  counterpart here; they are a later phase.
+- **The applications module has no settled statutory workflow.** The states and
+  transitions are a demo tracker (see [Applications](#applications-1)); which
+  authority, wording, and legal meaning each state should have is a product
+  decision that remains open, so nothing here should be read as an official
+  workflow.
+- **Applications differ from the frontend's contract.** The frontend's
+  `NewApplicationDraft` field names (`type`, `district`, `upazila`, `mouza`,
+  `khatianNumber`, `dagNumber`, `areaDecimal`, `share`, `documents`) match the
+  create body, but the frontend's `POST` expects a `{ referenceId, demo: true }`
+  acknowledgement while this API returns the application resource and creates it
+  as a **draft** (there is no `submit` flag on create); the detail contract's
+  `documents: DocumentItem[]` differs from the API's `declaredDocuments: string[]`;
+  and the frontend's demo `timeline` copy is Bengali text generated in the client,
+  not from the audit trail. The frontend is untouched.
 - **Rate limits are per route.** The login and registration budgets are counted
   separately, and both are per client address, not per account.
 - **`TRUST_PROXY` is off by default.** Forwarded headers are only honoured when a

@@ -6,15 +6,22 @@ import type { ExtractionField } from '../db/schema/enums.js'
 import { extractionFieldEnum } from '../db/schema/enums.js'
 import { users, type User } from '../db/schema/users.js'
 import {
+  assertProviderCanRead,
   ALL_EXTRACTION_FIELDS,
   type ExtractionProvider,
+  type ExtractionSourceContent,
 } from '../extraction/provider.js'
-import { NotFoundError } from '../lib/errors.js'
+import { NotFoundError, ProviderUnavailableError } from '../lib/errors.js'
 import { systemActor } from '../services/audit.js'
 import { persistExtractionResult } from '../services/extractions.js'
-import type { ClaimedJob } from '../services/jobs.js'
+import {
+  assertJobLeaseHeld,
+  type ClaimedJob,
+  type JobFence,
+} from '../services/jobs.js'
 import { reconcileParcel } from '../services/reconciliation.js'
 import { generateReadinessReport } from '../services/readiness.js'
+import { readStoredFile, StoredFileError } from '../services/storage.js'
 
 /**
  * Does the actual work of a claimed job.
@@ -23,12 +30,15 @@ import { generateReadinessReport } from '../services/readiness.js'
  * `ExtractionProvider` for readings and stores them, with no knowledge of
  * whether those readings came from the deterministic mock or a hosted model.
  *
- * Two deliberate properties:
+ * Three deliberate properties:
  *
  * - **The slow call happens outside a transaction.** A provider call can take
  *   tens of seconds; holding a database transaction open across it would pin a
  *   connection and block other work. The claim's lease — not a transaction — is
  *   what reserves the job, which is precisely why the lease exists.
+ * - **Every write is fenced on the lease.** The ownership check is the first
+ *   statement of the transaction that writes a result, so a worker that lost its
+ *   lease mid-read rolls back instead of adding a second copy of the same work.
  * - **Worker writes are attributed to the system.** An extraction produced by the
  *   worker is recorded as a system action naming the worker, not as an action by
  *   the person who requested it. Pretending a human performed an automated read
@@ -40,6 +50,12 @@ export interface JobProcessorContext {
   database: Database
   provider: ExtractionProvider
   rulesVersion: string
+  /** Identifies the lease this work is fenced on. */
+  fence: JobFence
+  /** Private storage directory, so a reader can be given the real document. */
+  uploadDir: string
+  /** Largest document that may be handed to a reader. */
+  maxContentBytes: number
   log: {
     info: (details: Record<string, unknown>, message: string) => void
     warn: (details: Record<string, unknown>, message: string) => void
@@ -125,24 +141,41 @@ async function processDocumentExtraction(
 
   const fields = requestedFields(job.payload)
 
-  // The slow, fallible part. No transaction is open here, so a provider that
-  // takes thirty seconds does not hold a database connection while it works.
-  const extraction = await context.provider.extract({
+  // A reader is given the document itself. Loading is skipped entirely for a
+  // provider that does not read content, so the synthetic double still works
+  // against a metadata-only record in tests.
+  const content = context.provider.readsDocumentContent
+    ? await loadSourceContent(context, document)
+    : null
+
+  const request = {
     sourceDocumentId: document.id,
     title: document.title,
     reference: document.reference,
     pageCount: document.pageCount,
     fields,
-  })
+    content,
+  }
 
-  const stored = await context.database.orm.transaction(async (tx) =>
-    persistExtractionResult(tx, {
+  // Decide readability *before* calling the provider, so "nothing can read this
+  // file" is reported as itself rather than as an opaque provider error.
+  assertProviderCanRead(context.provider, request)
+
+  // The slow, fallible part. No transaction is open here, so a provider that
+  // takes thirty seconds does not hold a database connection while it works.
+  const extraction = await context.provider.extract(request)
+
+  const stored = await context.database.orm.transaction(async (tx) => {
+    // The fence: if this worker no longer holds the job, nothing is written.
+    await assertJobLeaseHeld(tx, context.fence)
+
+    return persistExtractionResult(tx, {
       result: extraction,
       parcelId,
       sourceDocumentId: document.id,
       actor: systemActor('extraction-worker'),
-    }),
-  )
+    })
+  })
 
   const unclearCount = stored.filter((row) => row.isUnclear).length
 
@@ -150,6 +183,7 @@ async function processDocumentExtraction(
     {
       jobId: job.id,
       provider: extraction.provider,
+      readsDocumentContent: context.provider.readsDocumentContent,
       fieldCount: stored.length,
       unclearCount,
     },
@@ -163,6 +197,10 @@ async function processDocumentExtraction(
     result: {
       provider: extraction.provider,
       model: extraction.model,
+      // Say plainly whether these readings came from the document or from a
+      // synthetic double, so a result is never mistaken for a real read.
+      readsDocumentContent: context.provider.readsDocumentContent,
+      hadStoredContent: content !== null,
       extractionIds: stored.map((row) => row.id),
       fieldCount: stored.length,
       unclearCount,
@@ -170,6 +208,53 @@ async function processDocumentExtraction(
       parcelId,
       sourceDocumentId: document.id,
     },
+  }
+}
+
+/**
+ * Reads the stored document a job names, bounded and verified.
+ *
+ * The path comes from the record's storage key, never from the job payload or a
+ * caller, and the bytes stay in this process: they are handed to the provider and
+ * are never written to a job payload, a log line, or an audit row.
+ */
+async function loadSourceContent(
+  context: JobProcessorContext,
+  document: typeof sourceDocuments.$inferSelect,
+): Promise<ExtractionSourceContent> {
+  if (document.storageKey === null) {
+    throw new ProviderUnavailableError(
+      'The document has no stored file, so a provider that reads documents cannot be used for it.',
+    )
+  }
+
+  if (document.contentType === null) {
+    throw new ProviderUnavailableError(
+      'The document has a stored file but no recorded media type, so it cannot be sent to a reader.',
+    )
+  }
+
+  try {
+    const loaded = await readStoredFile(context.uploadDir, document.storageKey, {
+      maxBytes: context.maxContentBytes,
+      expectedSha256: document.checksumSha256,
+    })
+
+    return {
+      mediaType: document.contentType,
+      bytes: loaded.bytes,
+      byteSize: loaded.byteSize,
+      sha256: loaded.sha256,
+      originalFilename: document.originalFilename,
+    }
+  } catch (error) {
+    if (error instanceof StoredFileError) {
+      // The reason is named; no path, digest, or byte content is exposed.
+      throw new ProviderUnavailableError(
+        `The stored document could not be read (${error.reason}). Nothing was extracted.`,
+      )
+    }
+    throw error
   }
 }
 
@@ -189,6 +274,7 @@ async function processParcelReconciliation(
     parcelId,
     persist: true,
     rulesVersion: context.rulesVersion,
+    fence: context.fence,
   })
 
   const blocking = reconciliation.rules.filter(
@@ -222,6 +308,7 @@ async function processReadinessReport(
     user,
     parcelId,
     rulesVersion: context.rulesVersion,
+    fence: context.fence,
   })
 
   return {

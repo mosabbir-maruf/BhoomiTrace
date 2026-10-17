@@ -11,6 +11,7 @@ import {
   type RuleResult,
 } from '../validation/rules.js'
 import { AuditActions, recordAuditEvent } from './audit.js'
+import { assertJobLeaseHeld, type JobFence } from './jobs.js'
 import { loadVisibleParcel } from './parcels.js'
 
 /**
@@ -53,6 +54,12 @@ export interface ReconcileInput {
   persist: boolean
   requestId?: string | null
   rulesVersion: string
+  /**
+   * When present, the write is fenced on this worker's job lease: the guard is
+   * the first statement of the transaction, so a worker that lost its job
+   * commits nothing.
+   */
+  fence?: JobFence
 }
 
 /** Runs the rules and, optionally, raises findings for what failed. */
@@ -111,6 +118,12 @@ export async function reconcileParcel(
   const skipped: string[] = []
 
   await database.orm.transaction(async (tx) => {
+    // The fence, when a worker is driving this: if the job has moved on, the
+    // findings below are never written.
+    if (input.fence !== undefined) {
+      await assertJobLeaseHeld(tx, input.fence)
+    }
+
     for (const rule of actionable) {
       if (openRuleCodes.has(rule.ruleCode)) {
         skipped.push(rule.ruleCode)

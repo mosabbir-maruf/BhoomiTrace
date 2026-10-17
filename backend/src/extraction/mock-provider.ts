@@ -17,7 +17,10 @@ import {
  *
  * What it deliberately does *not* do:
  *
- * - It does not read pixels. It has no fixtures for arbitrary documents, so a
+ * - It does not read pixels, and it does not read the stored file even when one
+ *   is handed to it. Its readings come from fixtures keyed by document id, and
+ *   `readsDocumentContent` is `false` to say so.
+ * - It has no fixtures for arbitrary documents, so a
  *   document it does not know about yields every requested field marked
  *   `isUnclear`. Reporting "unreadable" is the honest answer from a reader that
  *   cannot read; filling in a plausible value would be an invented record.
@@ -63,6 +66,17 @@ export class MockExtractionProvider implements ExtractionProvider {
   readonly name = 'mock'
   readonly model: string
   readonly requiresCredentials = false
+  /**
+   * This provider does not read the document.
+   *
+   * Declared explicitly so nothing downstream can mistake a fixture for a
+   * reading: the flag travels into the job result and the startup log. It is
+   * also why the worker allows this provider to run against a metadata-only
+   * record, which a real reader is refused.
+   */
+  readonly readsDocumentContent = false
+  /** No media type applies: this provider consumes no content. */
+  readonly supportedMediaTypes: readonly string[] | null = null
 
   private readonly fixtures: Readonly<Record<string, MockDocumentFixture>>
   private readonly delayMs: number

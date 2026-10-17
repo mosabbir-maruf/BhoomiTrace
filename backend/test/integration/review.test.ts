@@ -64,6 +64,11 @@ interface DecisionBody {
   extractionId: string | null
   reviewerId: string
   outcome: string
+  /**
+   * The action the reviewer took: `under_review`, `resolved`, or `dismissed`.
+   * Null only for a decision recorded before this column existed.
+   */
+  findingAction: string | null
   extractedValue: string | null
   proposedValue: string | null
   note: string | null
@@ -604,6 +609,94 @@ describe('findings lifecycle', () => {
 
     const settledAgain = await viewFinding(target.id)
     expect(settledAgain.status).toBe('resolved')
+  })
+
+  it('records the reviewer’s action, so a dismissal is not read as a confirmation', async () => {
+    const resolvedParcel = await parcelWithFindings()
+    const resolvedFinding = resolvedParcel.findings[0]
+    if (resolvedFinding === undefined) throw new Error('Expected a raised finding.')
+
+    const resolved = await reviewer.post(`${API}/findings/${resolvedFinding.id}/review`, {
+      action: 'resolved',
+      reason: 'Compared against the register; the discrepancy is real and addressed.',
+      version: resolvedFinding.version,
+    })
+    expectStatus(resolved, 200)
+    const resolvedDecision = (resolved.json() as { decision: DecisionBody }).decision
+
+    // The action is stored in its own column, not inferred from the status.
+    expect(resolvedDecision.findingAction).toBe('resolved')
+    // A resolution confirms a real discrepancy.
+    expect(resolvedDecision.outcome).toBe('verified')
+
+    const dismissedParcel = await parcelWithFindings()
+    const dismissedFinding = dismissedParcel.findings[0]
+    if (dismissedFinding === undefined) throw new Error('Expected a raised finding.')
+
+    const dismissed = await reviewer.post(`${API}/findings/${dismissedFinding.id}/review`, {
+      action: 'dismissed',
+      reason: 'The two records describe different dag numbers, so this is not a discrepancy.',
+      version: dismissedFinding.version,
+    })
+    expectStatus(dismissed, 200)
+    const dismissedDecision = (dismissed.json() as { decision: DecisionBody }).decision
+
+    expect(dismissedDecision.findingAction).toBe('dismissed')
+    // A dismissal says the opposite of a confirmation, so it is not flattened
+    // into `verified` — the outcome has to agree with the action.
+    expect(dismissedDecision.outcome).toBe('dismissed')
+    expect(dismissedDecision.outcome).not.toBe(resolvedDecision.outcome)
+  })
+
+  it('keeps the action in the append-only history and the audit trail', async () => {
+    const { findings } = await parcelWithFindings()
+    const finding = findings[0]
+    if (finding === undefined) throw new Error('Expected a raised finding.')
+
+    const started = await reviewer.post(`${API}/findings/${finding.id}/review`, {
+      action: 'under_review',
+      version: finding.version,
+    })
+    expectStatus(started, 200)
+    const afterStart = (started.json() as { finding: FindingBody }).finding
+
+    const dismissed = await reviewer.post(`${API}/findings/${finding.id}/review`, {
+      action: 'dismissed',
+      reason: 'Not a real discrepancy.',
+      version: afterStart.version,
+    })
+    expectStatus(dismissed, 200)
+    const afterDismiss = (dismissed.json() as { finding: FindingBody }).finding
+    expect(afterDismiss.status).toBe('dismissed')
+
+    // The history shows what the reviewer did at each step, in the reviewer's
+    // own terms: taking it up, then dismissing it.
+    const decisions = await decisionsForFinding(finding.id)
+    expect(decisions.map((decision) => decision.findingAction)).toEqual([
+      'under_review',
+      'dismissed',
+    ])
+    expect(decisions.map((decision) => decision.outcome)).toEqual([
+      'needs_review',
+      'dismissed',
+    ])
+
+    // The audit trail carries the same fact, so a dismissal is not lost when
+    // only events are read.
+    const events = await admin.get(
+      `${API}/audit-events?entityId=${finding.id}&limit=20`,
+    )
+    expectStatus(events, 200)
+    const recorded = (
+      events.json() as { items: { changes: Record<string, unknown> | null }[] }
+    ).items
+
+    const dismissalEvent = recorded.find((event) => event.changes?.['action'] === 'dismissed')
+    expect(dismissalEvent).toBeDefined()
+    expect(dismissalEvent?.changes?.['after']).toMatchObject({ status: 'dismissed' })
+
+    // No event claims the finding was resolved.
+    expect(recorded.some((event) => event.changes?.['action'] === 'resolved')).toBe(false)
   })
 
   it('reports somebody else’s finding as not found to an applicant', async () => {

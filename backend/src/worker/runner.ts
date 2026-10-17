@@ -1,12 +1,16 @@
 import type { Database } from '../db/client.js'
 import type { ExtractionProvider } from '../extraction/provider.js'
+import { JobLeaseLostError } from '../lib/errors.js'
+import { safeErrorSummary } from '../lib/redact.js'
 import {
   claimNextJob,
   completeJob,
   failJobAttempt,
   markJobReviewRequired,
   recoverExpiredLeases,
+  renewJobLease,
   type ClaimedJob,
+  type JobFence,
 } from '../services/jobs.js'
 import {
   processClaimedJob,
@@ -21,10 +25,19 @@ import {
  * more than once: claiming uses `FOR UPDATE SKIP LOCKED`, so several workers
  * share the queue without coordination.
  *
+ * ## A lease that is renewed, not just held
+ *
+ * A fixed lease is a guess about how long work takes, and a wrong guess is
+ * expensive: too short and a second worker starts the same job while the first
+ * is still reading; too long and a crashed worker's job is stalled. So the lease
+ * is renewed while the job runs, at a fraction of its length, and *every write
+ * the job makes is fenced on it*. If a renewal fails, or the guarded update
+ * finds the job is no longer held, the worker stops: it logs, abandons the
+ * result, and lets recovery handle the job. It never writes a result for a lease
+ * it does not hold.
+ *
  * Shutdown is graceful. On `SIGINT`/`SIGTERM` the loop stops taking new work,
- * finishes the job it is already running, and then exits. Abandoning a job
- * mid-flight would be recoverable anyway — the lease would expire — but waiting
- * avoids making a colleague's work wait for a lease to time out.
+ * finishes the job it is already running, and then exits.
  */
 
 export interface WorkerLogger {
@@ -43,6 +56,10 @@ export interface ExtractionWorkerOptions {
   maxAttempts: number
   retryBackoffSeconds: number
   pollIntervalMs: number
+  /** Private storage directory, so a reader can be given the real document. */
+  uploadDir: string
+  /** Largest document that may be handed to a reader. */
+  maxContentBytes: number
   log: WorkerLogger
 }
 
@@ -51,12 +68,19 @@ export class ExtractionWorker {
   private inFlight = false
   private wakeUp: (() => void) | undefined
   private lastRecoveryAt = 0
+  /** Set when this worker is no longer entitled to write the job's result. */
+  private leaseLost = false
 
   constructor(private readonly options: ExtractionWorkerOptions) {}
 
   /** True while a job is being processed. Used by tests. */
   get busy(): boolean {
     return this.inFlight
+  }
+
+  /** True when the job in flight lost its lease. Used by tests. */
+  get lostLease(): boolean {
+    return this.leaseLost
   }
 
   /** Requests a graceful stop and releases any pending sleep. */
@@ -85,6 +109,16 @@ export class ExtractionWorker {
   /** The recovery interval: half the lease, capped at thirty seconds. */
   private get recoveryIntervalMs(): number {
     return Math.min((this.options.leaseSeconds * 1_000) / 2, 30_000)
+  }
+
+  /**
+   * How often the lease is renewed: a quarter of its length, at least 250 ms.
+   *
+   * Renewing well inside the lease leaves room for one slow renewal, so a brief
+   * database pause does not expire the lease out from under a healthy job.
+   */
+  private get heartbeatIntervalMs(): number {
+    return Math.max(250, Math.floor((this.options.leaseSeconds * 1_000) / 4))
   }
 
   /**
@@ -141,14 +175,21 @@ export class ExtractionWorker {
 
   private async runJob(job: ClaimedJob): Promise<void> {
     this.inFlight = true
+    this.leaseLost = false
     const startedAt = Date.now()
+    const fence: JobFence = { jobId: job.id, workerId: this.options.workerId }
 
     const context: JobProcessorContext = {
       database: this.options.database,
       provider: this.options.provider,
       rulesVersion: this.options.rulesVersion,
+      fence,
+      uploadDir: this.options.uploadDir,
+      maxContentBytes: this.options.maxContentBytes,
       log: this.options.log,
     }
+
+    const heartbeat = this.startHeartbeat(fence)
 
     this.options.log.info(
       {
@@ -162,6 +203,17 @@ export class ExtractionWorker {
 
     try {
       const outcome = await processClaimedJob(context, job)
+
+      if (this.leaseLost) {
+        // The work itself may have completed, but this worker is no longer
+        // entitled to record it. Whatever the processor tried to write was
+        // rolled back by the fence; the job is left for recovery.
+        this.options.log.warn(
+          { jobId: job.id, workerId: this.options.workerId },
+          'job lease was lost while working; the result was not recorded',
+        )
+        return
+      }
 
       if (outcome.status === 'review_required') {
         await markJobReviewRequired(
@@ -189,6 +241,20 @@ export class ExtractionWorker {
         'job finished',
       )
     } catch (error) {
+      if (error instanceof JobLeaseLostError || this.leaseLost) {
+        // Recording a failure for a job this worker does not hold would be
+        // another write on somebody else's lease. Recovery owns it now.
+        this.options.log.warn(
+          {
+            jobId: job.id,
+            workerId: this.options.workerId,
+            reason: safeErrorSummary(error),
+          },
+          'job lease lost; the attempt was abandoned',
+        )
+        return
+      }
+
       const failure = await failJobAttempt(this.options.database, {
         jobId: job.id,
         workerId: this.options.workerId,
@@ -208,7 +274,69 @@ export class ExtractionWorker {
         'job attempt failed',
       )
     } finally {
+      await heartbeat.stop()
       this.inFlight = false
+    }
+  }
+
+  /**
+   * Renews the lease while a job runs.
+   *
+   * The renewals are serialised — a tick is skipped while the previous one is
+   * still in flight — so a slow database cannot pile up overlapping updates.
+   */
+  private startHeartbeat(fence: JobFence): { stop: () => Promise<void> } {
+    let stopped = false
+    let renewal: Promise<void> | undefined
+
+    const timer = setInterval(() => {
+      if (stopped || this.leaseLost || renewal !== undefined) return
+      renewal = this.renewLease(fence).finally(() => {
+        renewal = undefined
+      })
+    }, this.heartbeatIntervalMs)
+
+    // A heartbeat must not by itself keep the process alive.
+    timer.unref()
+
+    return {
+      stop: async () => {
+        stopped = true
+        clearInterval(timer)
+        if (renewal !== undefined) await renewal
+      },
+    }
+  }
+
+  private async renewLease(fence: JobFence): Promise<void> {
+    try {
+      const held = await renewJobLease(this.options.database, {
+        jobId: fence.jobId,
+        workerId: fence.workerId,
+        leaseSeconds: this.options.leaseSeconds,
+      })
+
+      if (!held) {
+        this.leaseLost = true
+        this.options.log.error(
+          { jobId: fence.jobId, workerId: fence.workerId },
+          'job lease was lost; this worker will not record a result',
+        )
+      }
+    } catch (error) {
+      // A renewal that cannot be confirmed is treated as a lost lease.
+      // Continuing would risk two workers writing the same job's results, which
+      // is worse than discarding one attempt: the job is recovered by lease
+      // expiry and retried.
+      this.leaseLost = true
+      this.options.log.error(
+        {
+          jobId: fence.jobId,
+          workerId: fence.workerId,
+          reason: safeErrorSummary(error),
+        },
+        'job lease renewal failed; treating the lease as lost',
+      )
     }
   }
 }

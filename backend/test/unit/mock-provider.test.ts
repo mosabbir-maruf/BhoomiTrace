@@ -28,6 +28,7 @@ function request(sourceDocumentId: string, fields: ExtractionRequest['fields'] =
     reference: null,
     pageCount: 1,
     fields,
+    content: null,
   }
 }
 
@@ -38,6 +39,38 @@ describe('MockExtractionProvider', () => {
     expect(provider.name).toBe('mock')
     expect(provider.requiresCredentials).toBe(false)
     expect(provider.isConfigured()).toBe(true)
+  })
+
+  it('declares that it does not read document content', () => {
+    const provider = new MockExtractionProvider()
+
+    // This is what distinguishes a synthetic double from a reader: it is what
+    // lets the worker skip loading a file, and what the job result reports so a
+    // reader of the result never mistakes fixture output for a real read.
+    expect(provider.readsDocumentContent).toBe(false)
+    expect(provider.supportedMediaTypes).toBeNull()
+  })
+
+  it('ignores any content it is handed, because it reads no content', async () => {
+    const provider = new MockExtractionProvider({ fixtures: DEMO_DOCUMENT_FIXTURES })
+
+    const withContent = await provider.extract({
+      ...request(DEMO_DOCUMENT, ['khatian']),
+      content: {
+        mediaType: 'application/pdf',
+        bytes: new Uint8Array([1, 2, 3, 4]),
+        byteSize: 4,
+        sha256: 'a'.repeat(64),
+        originalFilename: 'record.pdf',
+      },
+    })
+
+    // Identical to the fixture result: the bytes had no effect, because nothing
+    // in this provider looks at them.
+    expect(withContent.fields.find((field) => field.field === 'khatian')).toMatchObject({
+      value: '104',
+      isUnclear: false,
+    })
   })
 
   it('reports every field as unclear for a document it has no fixture for', async () => {
