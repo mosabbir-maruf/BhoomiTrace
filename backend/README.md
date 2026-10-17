@@ -815,8 +815,9 @@ Applies to `ghcr.io/<owner>/bhoomitrace-backend`. Implemented by
 ### Limitations
 
 - No push to EC2 or other hosts is performed in Phase 4.
-- The retention report is reporting-only; automated deletion is deliberately
-  not enabled because safe, verified deletion could not be guaranteed.
+- Automated deletion runs after each publish via
+  `.github/scripts/ghcr-retention.sh` (keep newest 2 plus immutable tags);
+  the retention report workflow still supports dry-run for manual review.
 - Package visibility (public vs. private) is governed by the repository/package
   settings on GitHub and is not asserted here; verify in the GitHub UI after the
   first publish.

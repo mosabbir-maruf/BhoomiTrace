@@ -74,10 +74,12 @@ jobs:
     needs: publish
     timeout-minutes: 10
     permissions:
+      contents: read
       packages: write
     env:
       MODE: delete
       KEEP_COUNT: '2'
+      SHA_KEEP_COUNT: '10'
       OWNER: ${{ github.repository_owner }}
       PACKAGE: bhoomitrace-backend
       TOKEN: ${{ secrets.GITHUB_TOKEN }}
