@@ -8,133 +8,34 @@ on:
         required: false
         default: 'bhoomitrace-backend'
       keep_count:
-        description: 'Recent branch-tagged versions to keep per branch'
+        description: 'Recent versions to keep (immutable tags are always kept)'
         required: false
-        default: '10'
-      max_age_days:
-        description: 'Age after which untagged versions are candidates'
+        default: '2'
+      delete:
+        description: 'Delete candidates (false = dry-run report only)'
         required: false
-        default: '30'
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
 
 permissions:
   contents: read
-  packages: read
+  packages: write
 
 jobs:
   report:
-    name: Report retention candidates (dry-run only)
+    name: Retention report (delete only if explicitly enabled)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      PACKAGE_NAME: ${{ inputs.package_name }}
+      MODE: ${{ inputs.delete == 'true' && 'delete' || 'report' }}
       KEEP_COUNT: ${{ inputs.keep_count }}
-      MAX_AGE_DAYS: ${{ inputs.max_age_days }}
+      OWNER: ${{ github.repository_owner }}
+      PACKAGE: ${{ inputs.package_name }}
+      TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Lowercase registry owner
-        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
-        env:
-          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Enumerate package versions and apply policy
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          owner="$OWNER_LC"
-          package="$PACKAGE_NAME"
-          keep="${KEEP_COUNT}"
-          max_age="${MAX_AGE_DAYS}"
-          echo "Package: ghcr.io/$owner/$package"
-          echo "Retention policy (Phase 4, dry-run only - no deletion is performed):"
-          echo "  1. Keep every version carrying a sha-* tag (immutable release reference)."
-          echo "  2. Keep every version carrying a semver tag (x.y.z)."
-          echo "  3. Keep the most recent $keep versions for each branch tag."
-          echo "  4. Delete candidates: untagged versions older than $max_age days."
-          echo "  5. Never delete the only remaining version of the package."
-          echo "  6. Deletion is manual and requires explicit approval; this workflow never deletes."
-          echo
-
-          # Pick the correct REST endpoint for user vs. organization owners.
-          if curl -sS -o /dev/null -w '%{http_code}' \
-               -H "Authorization: Bearer $GH_TOKEN" \
-               -H "Accept: application/vnd.github+json" \
-               "https://api.github.com/orgs/$owner" | grep -q '^20'; then
-            base="https://api.github.com/orgs/$owner/packages/container/$package/versions"
-          else
-            base="https://api.github.com/users/$owner/packages/container/$package/versions"
-          fi
-
-          tmpdir="$(mktemp -d)"
-          page=1
-          while :; do
-            resp=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "${base}?per_page=100&page=${page}")
-            n=$(printf '%s' "$resp" | jq 'if type=="array" then length else 0 end')
-            if [ "$n" = "0" ]; then break; fi
-            printf '%s' "$resp" | jq -c '.[]' >> "$tmpdir/versions.jsonl"
-            page=$((page + 1))
-          done
-
-          if [ ! -s "$tmpdir/versions.jsonl" ]; then
-            echo "No versions found (package may not exist yet, or is private/inaccessible)."
-            exit 0
-          fi
-
-          total=$(wc -l < "$tmpdir/versions.jsonl" | tr -d ' ')
-          echo "Total versions: $total"
-          echo
-          printf '%-12s %-40s %-22s %s\n' "ID" "TAGS" "CREATED" "DECISION"
-          echo "--------------------------------------------------------------------------------"
-
-          # Build a keep-set of the newest $keep version ids per branch tag.
-          jq -r '(.metadata.container.tags // [])[]' "$tmpdir/versions.jsonl" \
-            | grep -v '^sha-' | grep -v '\.' | sort -u > "$tmpdir/branches.txt" || true
-
-          for b in $(cat "$tmpdir/branches.txt"); do
-            jq -r --arg b "$b" \
-              'select((.metadata.container.tags // []) | index($b)) | .id' \
-              "$tmpdir/versions.jsonl" \
-            | head -n "$keep" > "$tmpdir/keep_$b.txt"
-          done
-
-          while IFS= read -r line; do
-            id=$(printf '%s' "$line" | jq -r '.id')
-            tags=$(printf '%s' "$line" | jq -r '(.metadata.container.tags // []) | join(",")')
-            created=$(printf '%s' "$line" | jq -r '.created_at')
-            age_days=$(( ( $(date +%s) - $(date -d "$created" +%s) ) / 86400 ))
-
-            decision="KEEP"
-            # SHA-tagged or semver-tagged -> keep.
-            if echo "$tags" | grep -qE 'sha-|[0-9]+\.[0-9]+'; then
-              decision="KEEP (immutable ref)"
-            elif [ -z "$tags" ]; then
-              # Untagged: candidate only if older than max_age.
-              if [ "$age_days" -ge "$max_age" ]; then
-                decision="CANDIDATE (untagged, ${age_days}d >= ${max_age}d)"
-              else
-                decision="KEEP (untagged, ${age_days}d < ${max_age}d)"
-              fi
-            else
-              # Branch-tagged only: keep if in the newest $keep for its branch.
-              kept=0
-              for b in $(echo "$tags" | tr ',' '\n'); do
-                if grep -qx "$id" "$tmpdir/keep_$b.txt" 2>/dev/null; then kept=1; fi
-              done
-              if [ "$kept" = "1" ]; then
-                decision="KEEP (recent branch tag)"
-              else
-                decision="CANDIDATE (older branch-tagged)"
-              fi
-            fi
-
-            # Never mark the only version for deletion.
-            if [ "$total" = "1" ]; then decision="KEEP (only version)"; fi
-
-            printf '%-12s %-40s %-22s %s\n' "$id" "${tags:-<none>}" "$created" "$decision"
-          done < "$tmpdir/versions.jsonl"
-
-          echo
-          echo "No versions were deleted. To delete a candidate, follow the documented"
-          echo "manual procedure in backend/README.md (Phase 5). Automated deletion is"
-          echo "intentionally not enabled in Phase 4."
+      - name: Run retention helper
+        run: bash .github/scripts/ghcr-retention.sh

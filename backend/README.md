@@ -790,20 +790,27 @@ Docker state or `.env` files.
 
 ### GHCR retention policy
 
-Applies to `ghcr.io/<owner>/bhoomitrace-backend`:
+Applies to `ghcr.io/<owner>/bhoomitrace-backend`. Implemented by
+`.github/scripts/ghcr-retention.sh`, run automatically after each publish
+(delete mode, keep 2) and on demand via `ghcr-retention-report.yml`.
 
-- **Keep (never delete):**
-  - every version carrying a `sha-*` tag (immutable release reference),
-  - every version carrying a semver tag (`x.y.z`),
-  - the most recent 10 versions per branch tag,
-  - the only remaining version of the package.
-- **Delete candidates (manual review only):**
-  - untagged versions older than 30 days,
-  - branch-tagged versions beyond the most recent 10 per branch.
-- **Rules:** an immutable SHA tag is never removed; the known-good image
-  referenced by a release is never deleted; no automated deletion runs in
-  Phase 4. Deletion is performed manually (or in a later phase with explicit
-  approval) and verified by re-listing the package versions afterwards.
+- **Always kept (never deleted):**
+  - the most recent 2 versions by creation time,
+  - every version carrying an immutable `sha-*` tag,
+  - every version carrying a semver tag (`x.y.z`).
+- **Deleted automatically after publish:**
+  - versions that are neither in the newest 2 nor carry an immutable tag,
+    i.e. older branch-tagged or untagged images.
+- **Safety guards:** never deletes when 2 or fewer versions exist; never
+  deletes a version in the keep set; aborts if a deletion would leave fewer
+  than 2 versions; logs every action and verifies the final count.
+- **Manual override:** `ghcr-retention-report.yml` runs in dry-run (report)
+  mode by default; set `delete=true` to delete candidates manually.
+- **Limitation:** because immutable-tagged versions are always retained, the
+  package may hold more than 2 versions when releases exist. Exact "only 2
+  images" would require deleting release references, which is intentionally
+  not done (rollback safety). Package visibility (public/private) is governed
+  by GitHub settings and is not asserted here.
 
 ### Limitations
 
