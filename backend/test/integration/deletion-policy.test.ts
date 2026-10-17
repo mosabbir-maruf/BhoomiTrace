@@ -71,10 +71,25 @@ async function insertParcel(): Promise<typeof parcels.$inferSelect> {
 
 async function insertExtraction(
   parcelId: string,
+  sourceDocumentId?: string,
 ): Promise<typeof extractions.$inferSelect> {
   const rows = await database.orm
     .insert(extractions)
-    .values({ parcelId, field: 'area', recordedValue: '125.0000' })
+    .values({
+      parcelId,
+      field: 'area',
+      recordedValue: '125.0000',
+      // Left null for manual entry; set when the value came from a document.
+      ...(sourceDocumentId === undefined ? {} : { sourceDocumentId }),
+    })
+    .returning()
+  return firstOrThrow(rows)
+}
+
+async function insertDocument(): Promise<typeof sourceDocuments.$inferSelect> {
+  const rows = await database.orm
+    .insert(sourceDocuments)
+    .values({ title: `Synthetic policy document ${randomUUID()}` })
     .returning()
   return firstOrThrow(rows)
 }
@@ -299,5 +314,106 @@ describe('unreferenced records can still be deleted', () => {
 
     expect(extractionRemaining).toHaveLength(0)
     expect(findingRemaining).toHaveLength(0)
+  })
+})
+
+describe('source-document evidence retention', () => {
+  it('blocks deleting a source document that an extraction points at', async () => {
+    const parcel = await insertParcel()
+    const document = await insertDocument()
+    const extraction = await insertExtraction(parcel.id, document.id)
+
+    await expectRejection(
+      () =>
+        database.orm
+          .delete(sourceDocuments)
+          .where(eq(sourceDocuments.id, document.id)),
+      'extractions_source_document_id_source_documents_id_fk',
+    )
+
+    // Neither side of the evidence link was disturbed.
+    const documentSurvivors = await database.orm
+      .select()
+      .from(sourceDocuments)
+      .where(eq(sourceDocuments.id, document.id))
+    const extractionSurvivors = await database.orm
+      .select()
+      .from(extractions)
+      .where(eq(extractions.id, extraction.id))
+
+    expect(documentSurvivors).toHaveLength(1)
+    expect(extractionSurvivors).toHaveLength(1)
+    // Provenance is intact — not silently nulled.
+    expect(extractionSurvivors[0]?.sourceDocumentId).toBe(document.id)
+  })
+
+  it('deletes a source document that no extraction references', async () => {
+    const document = await insertDocument()
+
+    await database.orm
+      .delete(sourceDocuments)
+      .where(eq(sourceDocuments.id, document.id))
+
+    const remaining = await database.orm
+      .select()
+      .from(sourceDocuments)
+      .where(eq(sourceDocuments.id, document.id))
+    expect(remaining).toHaveLength(0)
+  })
+
+  it('keeps a source document when the extraction referencing it is removed by cascade', async () => {
+    const parcel = await insertParcel()
+    const document = await insertDocument()
+    const extraction = await insertExtraction(parcel.id, document.id)
+
+    // The extraction goes with its parcel; the document is never swept away.
+    await database.orm.delete(parcels).where(eq(parcels.id, parcel.id))
+
+    const extractionRemaining = await database.orm
+      .select()
+      .from(extractions)
+      .where(eq(extractions.id, extraction.id))
+    const documentRemaining = await database.orm
+      .select()
+      .from(sourceDocuments)
+      .where(eq(sourceDocuments.id, document.id))
+
+    expect(extractionRemaining).toHaveLength(0)
+    expect(documentRemaining).toHaveLength(1)
+
+    // With nothing referencing it any more, the document can now be deleted.
+    await database.orm
+      .delete(sourceDocuments)
+      .where(eq(sourceDocuments.id, document.id))
+    const afterDelete = await database.orm
+      .select()
+      .from(sourceDocuments)
+      .where(eq(sourceDocuments.id, document.id))
+    expect(afterDelete).toHaveLength(0)
+  })
+
+  it('supports manual-entry extractions with no source document', async () => {
+    const parcel = await insertParcel()
+
+    // No document was ever produced for this value.
+    const extraction = await insertExtraction(parcel.id)
+    expect(extraction.sourceDocumentId).toBeNull()
+
+    const stored = await database.orm
+      .select()
+      .from(extractions)
+      .where(eq(extractions.id, extraction.id))
+    expect(stored).toHaveLength(1)
+    expect(stored[0]?.sourceDocumentId).toBeNull()
+
+    // A null source reference imposes no constraint on deletion.
+    await database.orm
+      .delete(extractions)
+      .where(eq(extractions.id, extraction.id))
+    const remaining = await database.orm
+      .select()
+      .from(extractions)
+      .where(eq(extractions.id, extraction.id))
+    expect(remaining).toHaveLength(0)
   })
 })

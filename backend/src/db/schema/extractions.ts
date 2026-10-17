@@ -23,6 +23,13 @@ import { users } from './users.js'
  * once a human has decided, so raw and reviewed values are never conflated.
  * `confidence` is nullable on purpose: a value with no recorded confidence must
  * not be given an invented one.
+ *
+ * `source_document_id` is nullable so a manual-entry extraction can stand on its
+ * own, and is `ON DELETE RESTRICT` so that a document which evidence depends on
+ * cannot be removed. `SET NULL` would erase provenance silently — the extraction
+ * would survive with no way to say where the value came from. Documents are
+ * retired by status instead of being hard-deleted. See the deletion policy in
+ * `./index.js`.
  */
 export const extractions = pgTable(
   'extractions',
@@ -33,7 +40,7 @@ export const extractions = pgTable(
       .references(() => parcels.id, { onDelete: 'cascade' }),
     sourceDocumentId: uuid('source_document_id').references(
       () => sourceDocuments.id,
-      { onDelete: 'set null' },
+      { onDelete: 'restrict' },
     ),
     field: extractionFieldEnum('field').notNull(),
     recordedValue: text('recorded_value').notNull(),
@@ -60,6 +67,8 @@ export const extractions = pgTable(
   (table) => [
     index('extractions_parcel_idx').on(table.parcelId),
     index('extractions_review_status_idx').on(table.reviewStatus),
+    // Supports the RESTRICT check performed when a source document is deleted.
+    index('extractions_source_document_idx').on(table.sourceDocumentId),
     check(
       'extractions_confidence_range',
       sql`${table.confidence} is null or (${table.confidence} >= 0 and ${table.confidence} <= 1)`,

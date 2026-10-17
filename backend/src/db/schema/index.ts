@@ -20,6 +20,12 @@
  * - Derived data a reviewer has not yet acted on (`extractions`, `findings`)
  *   cascades with its parcel. Once review history exists, that cascade is
  *   blocked by the `RESTRICT` keys above, so history always wins.
+ * - **Evidence is retained too.** An extraction is the record of where a value
+ *   came from, so `extractions.source_document_id` is `ON DELETE RESTRICT`: a
+ *   source document that an extraction points at cannot be hard-deleted. A
+ *   `SET NULL` action would leave the extraction in place with its provenance
+ *   erased — the value would appear to have come from nowhere. The column stays
+ *   nullable so a manual-entry extraction can exist with no document at all.
  * - `audit_events.entity_type` / `entity_id` are intentionally *not* foreign
  *   keys: an audit entry records what happened and must outlive the entity it
  *   describes.

@@ -121,7 +121,7 @@ test/
 - **Confidence** is nullable and never invented.
 - **`updated_at`** is maintained by a database trigger, not by application code.
 
-### Append-only history and deletion policy
+### Append-only history, evidence retention, and deletion policy
 
 `review_decisions` and `audit_events` are append-only, enforced by database
 triggers that reject `UPDATE` and `DELETE`. Re-running a review inserts a new row;
@@ -134,6 +134,18 @@ contradict each other. The resulting policy:
 - Every foreign key held by an append-only table is `ON DELETE RESTRICT`, and
   nothing references an append-only table with `CASCADE` or `SET NULL`. A
   decision's subject and its author cannot be deleted while the decision exists.
+- **Evidence retention.** An extraction records where a value came from, so
+  `extractions.source_document_id` is `ON DELETE RESTRICT`: a source document
+  that an extraction points at cannot be hard-deleted. `SET NULL` would have left
+  the extraction standing with its provenance erased — the value would appear to
+  have come from nowhere. The column remains nullable, so a **manual-entry
+  extraction with no document is fully supported**; only a document that actually
+  has evidence attached to it is protected. Unlike the append-only tables, this is
+  a normal `RESTRICT` key and not a trigger: a source document referenced by an
+  extraction is refused, an unreferenced one is still deletable, and there is no
+  mutation check to contradict.
+  A supporting index (`extractions_source_document_idx`) keeps that check
+  efficient.
 - Records that carry history are never hard-deleted. Accounts are deactivated via
   `users.status = 'suspended'`; parcels are retained. Hard deletion is reserved
   for records with no history.
@@ -142,7 +154,8 @@ contradict each other. The resulting policy:
 - Derived data a reviewer has not yet acted on (`extractions`, `findings`)
   cascades with its parcel. Once review history exists, that cascade is blocked
   by the `RESTRICT` keys, so history always wins and the delete is atomic —
-  nothing is partially removed.
+  nothing is partially removed. Deleting such a parcel removes the extraction,
+  never the source document it cited.
 - `audit_events.entity_type` / `entity_id` are deliberately **not** foreign keys.
   An audit entry records what happened and must outlive the entity it describes.
 - `parcel_lineage` uses `ON DELETE RESTRICT` too, so lineage can never be
