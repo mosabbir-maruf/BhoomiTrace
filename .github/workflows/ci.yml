@@ -121,6 +121,13 @@ jobs:
             postgres:17-alpine \
             psql -h 127.0.0.1 -U bhoomitrace -d postgres -v ON_ERROR_STOP=1 -f /scripts/01-create-test-database.sql
 
+      - name: Seed synthetic test data
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://bhoomitrace:bhoomitrace@127.0.0.1:5432/bhoomitrace_test
+        run: npm run db:seed
+
       - name: Run test suite
         run: npm test
 
