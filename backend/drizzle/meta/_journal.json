@@ -1,0 +1,90 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792254621444,
+      "tag": "0000_lame_ego",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792254636740,
+      "tag": "0001_append_only_guards_and_timestamps",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792255235879,
+      "tag": "0002_append_only_fk_restrict",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792255900624,
+      "tag": "0003_extraction_source_document_restrict",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792256502938,
+      "tag": "0004_phase2_core",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792257040155,
+      "tag": "0005_parcel_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792258811391,
+      "tag": "0006_document_version",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792258878974,
+      "tag": "0007_source_document_version_trigger",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792261513102,
+      "tag": "0008_auth_session_token_hash_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792267344759,
+      "tag": "0009_phase2_job_idempotency_and_review_action",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792268120254,
+      "tag": "0010_phase2_applications",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792268237748,
+      "tag": "0011_applications_tracking_number_seq",
+      "breakpoints": true
+    }
+  ]
+}
