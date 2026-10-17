@@ -31,7 +31,7 @@ Development proceeds in five phases, each reviewed before the next begins.
 
 | Phase | Description | Status |
 | ----- | ----------- | ------ |
-| 1 | Backend foundation and database | In progress |
+| 1 | Backend foundation and database | Complete |
 | 2 | Core backend functionality, security, and testing | Not started |
 | 3 | Containerization and complete local dev environment | Not started |
 | 4 | GitHub Actions CI/CD and GHCR image publishing | Not started |
