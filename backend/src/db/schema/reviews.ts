@@ -8,7 +8,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core'
 
-import { reviewOutcomeEnum } from './enums.js'
+import { findingReviewActionEnum, reviewOutcomeEnum } from './enums.js'
 import { extractions } from './extractions.js'
 import { findings } from './findings.js'
 import { users } from './users.js'
@@ -43,6 +43,16 @@ export const reviewDecisions = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
     outcome: reviewOutcomeEnum('outcome').notNull(),
+    /**
+     * The explicit action taken on a finding, when this decision concerns one.
+     *
+     * `null` for extraction decisions, and also for finding decisions recorded
+     * before this column existed — those rows are append-only and are never
+     * rewritten to backfill a value, so a reader must treat `null` as "recorded
+     * before the action was stored separately". The audit trail holds the action
+     * for those rows.
+     */
+    findingAction: findingReviewActionEnum('finding_action'),
     /** The value as recorded, captured at decision time. */
     extractedValue: text('extracted_value'),
     /** The value the reviewer proposes instead, for a correction. */
@@ -63,6 +73,12 @@ export const reviewDecisions = pgTable(
     check(
       'review_decisions_proposed_value_matches_outcome',
       sql`(${table.outcome} = 'correction') or ${table.proposedValue} is null`,
+    ),
+    // A finding action describes a finding. Allowing one on an extraction
+    // decision would create a row whose two halves contradict each other.
+    check(
+      'review_decisions_finding_action_scope',
+      sql`${table.findingAction} is null or ${table.findingId} is not null`,
     ),
   ],
 )

@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import type { Database } from '../../src/db/client.js'
 import { DEFAULT_MIGRATIONS_FOLDER } from '../../src/db/migrate.js'
+import { applications } from '../../src/db/schema/applications.js'
 import { authSessions } from '../../src/db/schema/sessions.js'
 import { sourceDocuments } from '../../src/db/schema/documents.js'
 import { extractions } from '../../src/db/schema/extractions.js'
@@ -17,6 +18,7 @@ import {
   readinessChecklistItems,
   readinessReports,
 } from '../../src/db/schema/readiness.js'
+import { reviewDecisions } from '../../src/db/schema/reviews.js'
 import { users } from '../../src/db/schema/users.js'
 import {
   closeTestDatabase,
@@ -30,9 +32,10 @@ import {
  *
  * These assertions go straight to the database. They exist because the
  * invariants they check — one session per token hash, one page per number, one
- * job per idempotency key, a version that actually advances — are the kind that
- * an application can appear to honour while the schema does not enforce it, and
- * the difference only shows up under concurrency or after a bug.
+ * job per idempotency key *per requester*, a version that actually advances —
+ * are the kind that an application can appear to honour while the schema does
+ * not enforce it, and the difference only shows up under concurrency or after a
+ * bug.
  *
  * Nothing here is deleted to make a run repeatable. Every fixture carries a
  * per-run token, because append-only history accumulates by design.
@@ -120,6 +123,7 @@ describe('migrations', () => {
         'processing_jobs',
         'readiness_checklist_items',
         'readiness_reports',
+        'applications',
       ]),
     )
   })
@@ -137,6 +141,8 @@ describe('migrations', () => {
         'source_documents_bump_version',
         'extractions_bump_version',
         'findings_bump_version',
+        'applications_bump_version',
+        'applications_touch_updated_at',
       ]),
     )
   })
@@ -272,12 +278,61 @@ describe('processing_jobs', () => {
     })
 
     const key = `job-key-${RUN}-${randomUUID()}`
+    const owner = await insertUser()
+    await database.orm.insert(processingJobs).values({
+      kind: 'parcel_reconciliation',
+      parcelId: parcel.id,
+      requestedBy: owner.id,
+      idempotencyKey: key,
+    })
+
+    // The same caller may not open two jobs under one key.
+    await expectRejection(
+      () => database.orm.insert(processingJobs).values({
+        kind: 'parcel_reconciliation',
+        parcelId: parcel.id,
+        requestedBy: owner.id,
+        idempotencyKey: key,
+      }),
+    )
+  })
+
+  it('scopes a key to its requester, so two accounts may use the same key', async () => {
+    const parcel = await insertParcel()
+    const first = await insertUser()
+    const second = await insertUser()
+    const key = `shared-key-${RUN}-${randomUUID()}`
+
+    // The key is chosen by a client, so it cannot be trusted to be globally
+    // unique. A single global index would make one account's submission collide
+    // with another's — or, worse, hand one account the other's job.
+    await database.orm.insert(processingJobs).values({
+      kind: 'parcel_reconciliation',
+      parcelId: parcel.id,
+      requestedBy: first.id,
+      idempotencyKey: key,
+    })
+
+    await database.orm.insert(processingJobs).values({
+      kind: 'parcel_reconciliation',
+      parcelId: parcel.id,
+      requestedBy: second.id,
+      idempotencyKey: key,
+    })
+  })
+
+  it('keeps system jobs (no requester) deduplicated among themselves', async () => {
+    const parcel = await insertParcel()
+    const key = `system-key-${RUN}-${randomUUID()}`
+
     await database.orm.insert(processingJobs).values({
       kind: 'parcel_reconciliation',
       parcelId: parcel.id,
       idempotencyKey: key,
     })
 
+    // With a null requester, a scoped index would not constrain anything, which
+    // is why this case has its own partial index.
     await expectRejection(
       () => database.orm.insert(processingJobs).values({
         kind: 'parcel_reconciliation',
@@ -512,5 +567,215 @@ describe('provenance columns', () => {
             values ('BS', 'D', 'U', 'M', ${`JL-${RUN}-x`}, ${`KH-${RUN}-x`}, '1.0000', 1, 2)`,
       ),
     )
+  })
+})
+
+describe('review decision actions', () => {
+  async function insertFinding(): Promise<typeof findings.$inferSelect> {
+    const parcel = await insertParcel()
+    const rows = await database.orm
+      .insert(findings)
+      .values({
+        parcelId: parcel.id,
+        kind: 'area_mismatch',
+        severity: 'high',
+        title: 'Synthetic finding',
+        explanation: 'Synthetic finding for a schema check.',
+      })
+      .returning()
+    return firstOrThrow(rows)
+  }
+
+  it('records an explicit finding action and keeps a dismissal distinct', async () => {
+    const finding = await insertFinding()
+    const reviewer = await insertUser('reviewer')
+
+    const rows = await database.orm
+      .insert(reviewDecisions)
+      .values({
+        findingId: finding.id,
+        reviewerId: reviewer.id,
+        outcome: 'dismissed',
+        findingAction: 'dismissed',
+        note: 'The two records describe different dags, not a discrepancy.',
+      })
+      .returning()
+
+    const decision = await firstOrThrow(rows)
+    expect(decision.findingAction).toBe('dismissed')
+    // The outcome says what happened rather than flattening every settlement
+    // into `verified`, which would have stated the opposite of a dismissal.
+    expect(decision.outcome).toBe('dismissed')
+  })
+
+  it('refuses a finding action on a decision about an extraction', async () => {
+    const parcel = await insertParcel()
+    const reviewer = await insertUser('reviewer')
+    const extraction = await firstOrThrow(
+      await database.orm
+        .insert(extractions)
+        .values({ parcelId: parcel.id, field: 'area', recordedValue: '125.0000' })
+        .returning(),
+    )
+
+    // The two halves of the row would contradict each other.
+    await expectRejection(
+      () => database.orm.insert(reviewDecisions).values({
+        extractionId: extraction.id,
+        reviewerId: reviewer.id,
+        outcome: 'verified',
+        findingAction: 'resolved',
+      }),
+    )
+  })
+
+  it('stays append-only with the new column present', async () => {
+    const finding = await insertFinding()
+    const reviewer = await insertUser('reviewer')
+    const decision = await firstOrThrow(
+      await database.orm
+        .insert(reviewDecisions)
+        .values({
+          findingId: finding.id,
+          reviewerId: reviewer.id,
+          outcome: 'verified',
+          findingAction: 'resolved',
+        })
+        .returning(),
+    )
+
+    // A correction is a new row, never an edit — so an action already recorded
+    // cannot be rewritten to a different one.
+    await expectRejection(
+      () => database.orm
+        .update(reviewDecisions)
+        .set({ findingAction: 'dismissed' })
+        .where(eq(reviewDecisions.id, decision.id)),
+    )
+  })
+})
+
+describe('applications', () => {
+  async function insertApplication(
+    overrides: Partial<typeof applications.$inferInsert> = {},
+  ): Promise<typeof applications.$inferSelect> {
+    const owner = await insertUser()
+    const rows = await database.orm
+      .insert(applications)
+      .values({
+        ownerId: owner.id,
+        origin: 'user_created',
+        type: 'mutation',
+        district: `P2District-${RUN}`,
+        upazila: 'P2Upazila',
+        mouza: `P2Mouza-${RUN}`,
+        khatianNumber: `KHA-${RUN}-${randomUUID().slice(0, 6)}`,
+        dagNumber: `DAG-${RUN}-${randomUUID().slice(0, 6)}`,
+        ...overrides,
+      })
+      .returning()
+    return firstOrThrow(rows)
+  }
+
+  it('starts as a draft with no tracking number', async () => {
+    const application = await insertApplication()
+
+    expect(application.status).toBe('draft')
+    expect(application.trackingNumber).toBeNull()
+    expect(application.submittedAt).toBeNull()
+    expect(application.version).toBe(1)
+  })
+
+  it('requires a tracking number and a submission time once it leaves draft', async () => {
+    const owner = await insertUser()
+    const base = {
+      ownerId: owner.id,
+      origin: 'user_created' as const,
+      type: 'mutation' as const,
+      district: `P2District-${RUN}`,
+      upazila: 'P2Upazila',
+      mouza: `P2Mouza-${RUN}`,
+      khatianNumber: `KHB-${RUN}`,
+      dagNumber: `DAGB-${RUN}`,
+    }
+
+    // Submitted, but with no reference number: the row would look submitted and
+    // be unreferenceable at the same time.
+    await expectRejection(
+      () => database.orm.insert(applications).values({ ...base, status: 'submitted' }),
+    )
+    // A tracking number while still a draft is the mirror image.
+    await expectRejection(
+      () => database.orm
+        .insert(applications)
+        .values({ ...base, trackingNumber: `BT-${RUN}-x` }),
+    )
+
+    const submitted = await insertApplication({
+      status: 'submitted',
+      trackingNumber: `BT-${RUN}-${randomUUID().slice(0, 8)}`,
+      submittedAt: new Date(),
+    })
+    expect(submitted.status).toBe('submitted')
+  })
+
+  it('enforces a complete rational share and a non-negative area', async () => {
+    await expectRejection(() =>
+      insertApplication({ shareNumerator: 1, shareDenominator: null }),
+    )
+    await expectRejection(() =>
+      insertApplication({ shareNumerator: 1, shareDenominator: 0 }),
+    )
+    await expectRejection(() => insertApplication({ areaDecimal: '-1.0000' }))
+  })
+
+  it('refuses a decision timestamp outside a settled state', async () => {
+    await expectRejection(() =>
+      insertApplication({ status: 'submitted', trackingNumber: `BT-${RUN}-d`, submittedAt: new Date(), decidedAt: new Date() }),
+    )
+  })
+
+  it('keeps the tracking number unique', async () => {
+    const trackingNumber = `BT-${RUN}-${randomUUID().slice(0, 8)}`
+    await insertApplication({
+      status: 'submitted',
+      trackingNumber,
+      submittedAt: new Date(),
+    })
+
+    // A reference number identifies one filing; two filings sharing one would
+    // make the reference meaningless.
+    await expectRejection(() =>
+      insertApplication({ status: 'submitted', trackingNumber, submittedAt: new Date() }),
+    )
+  })
+
+  it('advances its version on update and refuses to be orphaned by a user delete', async () => {
+    const application = await insertApplication()
+
+    const bumped = await firstOrThrow(
+      await database.orm
+        .update(applications)
+        .set({ mouza: `P2Mouza-renamed-${RUN}` })
+        .where(eq(applications.id, application.id))
+        .returning(),
+    )
+    expect(bumped.version).toBe(2)
+
+    // A filing belongs to an account that is suspended, never hard-deleted, so
+    // the reference cannot be destroyed by removing the owner.
+    await expectRejection(
+      () => database.orm.delete(users).where(eq(users.id, application.ownerId)),
+    )
+  })
+
+  it('refuses to delete the parcel a filing points at', async () => {
+    const parcel = await insertParcel()
+    const application = await insertApplication({ parcelId: parcel.id })
+
+    await expectRejection(
+      () => database.orm.delete(parcels).where(eq(parcels.id, parcel.id)),
+    )
+    expect(application.parcelId).toBe(parcel.id)
   })
 })

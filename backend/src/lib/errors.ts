@@ -81,6 +81,57 @@ export class ConflictError extends AppError {
   }
 }
 
+/**
+ * Raised when an idempotency key is reused for a different request.
+ *
+ * A key identifies *one* unit of work. Returning whatever job already exists
+ * under a key would answer a question the caller did not ask — and, when the key
+ * belongs to somebody else, would leak their job. A distinct code lets a client
+ * tell "you already asked for this" apart from "you asked for something else
+ * with the same key", which the plain `conflict` code cannot express.
+ */
+export class IdempotencyKeyReusedError extends AppError {
+  override readonly name = 'IdempotencyKeyReusedError'
+
+  constructor(
+    message = 'That idempotency key was already used for a different request.',
+    details?: ErrorDetails,
+  ) {
+    super(409, 'idempotency_key_reused', message, details)
+  }
+}
+
+/**
+ * Raised when a worker tries to write for a job it no longer holds.
+ *
+ * Two workers must never both produce a job's side effects. Every write a worker
+ * makes is fenced on the lease it claimed, so a worker whose lease expired and
+ * was reclaimed by somebody else fails this check and rolls back rather than
+ * committing a duplicate result.
+ */
+export class JobLeaseLostError extends AppError {
+  override readonly name = 'JobLeaseLostError'
+
+  constructor(
+    message = 'This job is no longer held by this worker, so no result was recorded.',
+    details?: ErrorDetails,
+  ) {
+    super(409, 'job_lease_lost', message, details)
+  }
+}
+
+/** Raised when a state machine refuses a move from the state a record is in. */
+export class InvalidTransitionError extends AppError {
+  override readonly name = 'InvalidTransitionError'
+
+  constructor(
+    message = 'That transition is not allowed from the current state.',
+    details?: ErrorDetails,
+  ) {
+    super(409, 'invalid_transition', message, details)
+  }
+}
+
 /** Raised when an optimistic-concurrency token no longer matches. */
 export class ConcurrencyError extends AppError {
   override readonly name = 'ConcurrencyError'

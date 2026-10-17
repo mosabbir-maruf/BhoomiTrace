@@ -99,6 +99,31 @@ export const reviewOutcomeEnum = pgEnum('review_outcome', [
   'verified',
   'correction',
   'needs_review',
+  /**
+   * A finding that was dismissed rather than confirmed.
+   *
+   * Added after the initial release: a dismissal previously had to reuse
+   * `verified`, which stated the opposite of what happened. A false positive is
+   * not a verification, so the vocabulary now says so directly. Extraction
+   * decisions never use this value.
+   */
+  'dismissed',
+])
+
+/**
+ * The explicit action a reviewer took on a finding.
+ *
+ * Held as its own column on `review_decisions` so that the append-only history
+ * records *what the reviewer did*, not merely that something was decided. A
+ * resolution and a dismissal are different facts — one says the concern was real
+ * and was addressed, the other says it was not real — and a client must be able
+ * to tell them apart without inferring anything from a finding's current status,
+ * which may have moved on since.
+ */
+export const findingReviewActionEnum = pgEnum('finding_review_action', [
+  'under_review',
+  'resolved',
+  'dismissed',
 ])
 
 /**
@@ -163,6 +188,41 @@ export const parcelLifecycleEnum = pgEnum('parcel_lifecycle', [
 ])
 
 /**
+ * The kind of filing an application represents.
+ *
+ * These are the three kinds the applicant-facing prototype offers. The names
+ * describe what the applicant is asking for in this system; they are not
+ * statutory categories, and nothing in the platform acts on them on behalf of an
+ * authority.
+ */
+export const applicationTypeEnum = pgEnum('application_type', [
+  'mutation',
+  'record_correction',
+  'certified_copy',
+])
+
+/**
+ * The states an application can be in.
+ *
+ * `draft` is the only state a filing starts in and the only one with no tracking
+ * number. `approved` and `rejected` are terminal: they record that this tracker
+ * reached an outcome, not that any authority decided anything.
+ *
+ * The legal meaning of these states is an open product decision (see the README):
+ * the platform deliberately does not claim that reaching `approved` confirms a
+ * right in land.
+ */
+export const applicationStatusEnum = pgEnum('application_status', [
+  'draft',
+  'submitted',
+  'under_review',
+  'documents_required',
+  'hearing_scheduled',
+  'approved',
+  'rejected',
+])
+
+/**
  * TypeScript aliases for the enumerated sets.
  *
  * These are derived from the `pgEnum` definitions above rather than written out
@@ -185,7 +245,11 @@ export type FindingKind = (typeof findingKindEnum.enumValues)[number]
 export type FindingSeverity = (typeof findingSeverityEnum.enumValues)[number]
 export type FindingStatus = (typeof findingStatusEnum.enumValues)[number]
 export type ReviewOutcome = (typeof reviewOutcomeEnum.enumValues)[number]
+export type FindingReviewAction =
+  (typeof findingReviewActionEnum.enumValues)[number]
 export type DataOrigin = (typeof dataOriginEnum.enumValues)[number]
+export type ApplicationType = (typeof applicationTypeEnum.enumValues)[number]
+export type ApplicationStatus = (typeof applicationStatusEnum.enumValues)[number]
 export type ProcessingJobKind = (typeof processingJobKindEnum.enumValues)[number]
 export type ProcessingJobStatus =
   (typeof processingJobStatusEnum.enumValues)[number]

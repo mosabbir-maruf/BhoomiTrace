@@ -33,8 +33,9 @@ import { users } from './users.js'
  *
  * `idempotency_key` makes repeated client submissions safe: a second submission
  * with the same key returns the job already created instead of duplicating
- * expensive work. It is unique only among non-null values, so jobs that need no
- * key are unaffected.
+ * expensive work. It is unique *per requester* and only among non-null values,
+ * so two accounts may independently choose the same key without colliding or
+ * seeing each other's work, and jobs that need no key are unaffected.
  *
  * References to the parcel and document are `ON DELETE RESTRICT`: a job either
  * explains why it exists or it does not, and losing its subject would leave an
@@ -87,9 +88,24 @@ export const processingJobs = pgTable(
   (table) => [
     // The claim query: ready jobs by status and availability.
     index('processing_jobs_claim_idx').on(table.status, table.availableAt),
-    uniqueIndex('processing_jobs_idempotency_key_unique')
+    // Idempotency is scoped to the requester, never global. A client-chosen key
+    // cannot be allowed to reach across accounts: with one global index, two
+    // people could pick the same key and one of them would be handed the
+    // other's job. Two partial indexes express the two cases separately, because
+    // PostgreSQL treats `NULL` as distinct in a unique index, so a single
+    // `(requested_by, idempotency_key)` index would not constrain the
+    // system-scheduled jobs at all.
+    uniqueIndex('processing_jobs_idempotency_key_user_unique')
+      .on(table.requestedBy, table.idempotencyKey)
+      .where(
+        sql`${table.requestedBy} is not null and ${table.idempotencyKey} is not null`,
+      ),
+    // System-scheduled work (no requester) is still deduplicated among itself.
+    uniqueIndex('processing_jobs_idempotency_key_system_unique')
       .on(table.idempotencyKey)
-      .where(sql`${table.idempotencyKey} is not null`),
+      .where(
+        sql`${table.requestedBy} is null and ${table.idempotencyKey} is not null`,
+      ),
     index('processing_jobs_parcel_idx').on(table.parcelId),
     index('processing_jobs_document_idx').on(table.sourceDocumentId),
     index('processing_jobs_requested_by_idx').on(table.requestedBy),

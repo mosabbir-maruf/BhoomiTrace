@@ -1,11 +1,14 @@
 import { z } from 'zod'
 
 import {
+  applicationStatusEnum,
+  applicationTypeEnum,
   checklistOutcomeEnum,
   documentStatusEnum,
   extractionFieldEnum,
   extractionReviewStatusEnum,
   findingKindEnum,
+  findingReviewActionEnum,
   findingSeverityEnum,
   findingStatusEnum,
   lineageCertaintyEnum,
@@ -419,6 +422,9 @@ export const findingKindSchema = z.enum(findingKindEnum.enumValues)
 export const findingSeveritySchema = z.enum(findingSeverityEnum.enumValues)
 export const findingStatusSchema = z.enum(findingStatusEnum.enumValues)
 export const reviewOutcomeSchema = z.enum(reviewOutcomeEnum.enumValues)
+export const findingReviewActionSchema = z.enum(
+  findingReviewActionEnum.enumValues,
+)
 
 export const findingSchema = z.object({
   id: z.uuid(),
@@ -441,6 +447,15 @@ export const reviewDecisionSchema = z.object({
   extractionId: z.uuid().nullable(),
   reviewerId: z.uuid(),
   outcome: reviewOutcomeSchema,
+  /**
+   * The action taken on a finding: `under_review`, `resolved`, or `dismissed`.
+   *
+   * Null for an extraction decision, and for finding decisions recorded before
+   * the action was stored in its own column. This is the field that
+   * distinguishes a resolution from a dismissal; a client never has to infer it
+   * from a finding's present status, which may have changed since.
+   */
+  findingAction: findingReviewActionSchema.nullable(),
   extractedValue: z.string().nullable(),
   proposedValue: z.string().nullable(),
   note: z.string().nullable(),
@@ -455,7 +470,7 @@ export const reviewExtractionBodySchema = z.object({
 })
 
 export const reviewFindingBodySchema = z.object({
-  action: z.enum(['under_review', 'resolved', 'dismissed']),
+  action: findingReviewActionSchema,
   reason: z.string().trim().max(1_000).nullable().optional(),
   version: z.number().int().min(1),
 })
@@ -599,6 +614,147 @@ export const enqueueJobBodySchema = z.discriminatedUnion('kind', [
 export const jobListQuerySchema = paginationQuery.extend({
   status: jobStatusSchema.optional(),
   kind: jobKindSchema.optional(),
+})
+
+/* -------------------------------------------------------------------------- */
+/* Applications                                                                */
+/* -------------------------------------------------------------------------- */
+
+export const applicationTypeSchema = z.enum(applicationTypeEnum.enumValues)
+export const applicationStatusSchema = z.enum(applicationStatusEnum.enumValues)
+
+/**
+ * The checklist codes an applicant may declare.
+ *
+ * Kept in step with the applicant-facing prototype's per-type checklist. A code
+ * that is not in this set is rejected rather than stored, so the column stays a
+ * meaningful vocabulary instead of free text.
+ */
+export const declarableDocumentCodeSchema = z.enum([
+  'deed',
+  'id',
+  'khatian',
+  'tax',
+  'heir',
+])
+
+/** A share as a fraction such as `"1/3"`, or a whole number such as `"2"`. */
+const shareString = z
+  .string()
+  .trim()
+  .regex(/^\d+(\s*\/\s*\d+)?$/, 'must be a fraction such as "1/3"')
+
+export const applicationSchema = z.object({
+  id: z.uuid(),
+  ownerId: z.uuid(),
+  /** Null while the application is still a draft. */
+  trackingNumber: z.string().nullable(),
+  type: applicationTypeSchema,
+  status: applicationStatusSchema,
+  district: z.string(),
+  upazila: z.string(),
+  mouza: z.string(),
+  khatianNumber: z.string(),
+  dagNumber: z.string(),
+  /** Exact decimal string, or null when none was recorded. Never a float. */
+  areaDecimal: z.string().nullable(),
+  /** Exact share as `"n/d"`, or null. */
+  share: z.string().nullable(),
+  parcelId: z.uuid().nullable(),
+  /** Declared checklist codes: what the applicant says they are supplying. */
+  declaredDocuments: z.array(z.string()),
+  submittedAt: isoDate.nullable(),
+  decidedAt: isoDate.nullable(),
+  decisionNote: z.string().nullable(),
+  nextStep: z.string().nullable(),
+  deadline: isoDate.nullable(),
+  origin: dataOriginSchema,
+  version: z.number().int(),
+  createdAt: isoDate,
+  updatedAt: isoDate,
+})
+
+export const applicationTimelineEventSchema = z.object({
+  date: isoDate,
+  title: z.string(),
+  note: z.string().optional(),
+})
+
+/**
+ * An application with its derived detail.
+ *
+ * `timeline` is read from the append-only audit trail, so it cannot be edited
+ * after the fact. `today` lets a client compare a deadline without trusting its
+ * own clock.
+ */
+export const applicationDetailSchema = applicationSchema.extend({
+  today: z.string(),
+  timeline: z.array(applicationTimelineEventSchema),
+})
+
+export const applicationListQuerySchema = paginationQuery.extend({
+  status: applicationStatusSchema.optional(),
+  type: applicationTypeSchema.optional(),
+  ownerId: z.uuid().optional(),
+  parcelId: z.uuid().optional(),
+})
+
+/**
+ * Creating a filing.
+ *
+ * The field names match the applicant-facing prototype's draft, so the client
+ * sends what it already collects. Nothing here sets a status: a new filing is
+ * always a draft, and moving it forward is an explicit transition.
+ */
+export const createApplicationBodySchema = z.object({
+  type: applicationTypeSchema,
+  district: z.string().trim().min(1).max(120),
+  upazila: z.string().trim().min(1).max(120),
+  mouza: z.string().trim().min(1).max(120),
+  khatianNumber: z.string().trim().min(1).max(64),
+  dagNumber: z.string().trim().min(1).max(64),
+  /** Omitted when the applicant does not know the area. */
+  areaDecimal: decimalArea.optional(),
+  /** Omitted when the applicant does not know the share. */
+  share: shareString.optional(),
+  /** Declared checklist codes. */
+  documents: z.array(declarableDocumentCodeSchema).max(20).default([]),
+  /** An existing parcel this concerns. */
+  parcelId: z.uuid().optional(),
+  /** Only an administrator may set this; ignored for everybody else. */
+  ownerId: z.uuid().optional(),
+})
+
+export const updateApplicationBodySchema = z.object({
+  /** Optimistic-concurrency token: the version the caller last read. */
+  version: z.number().int().min(1),
+  district: z.string().trim().min(1).max(120).optional(),
+  upazila: z.string().trim().min(1).max(120).optional(),
+  mouza: z.string().trim().min(1).max(120).optional(),
+  khatianNumber: z.string().trim().min(1).max(64).optional(),
+  dagNumber: z.string().trim().min(1).max(64).optional(),
+  areaDecimal: decimalArea.nullable().optional(),
+  share: shareString.nullable().optional(),
+  documents: z.array(declarableDocumentCodeSchema).max(20).optional(),
+  parcelId: z.uuid().nullable().optional(),
+})
+
+/**
+ * Requesting a transition.
+ *
+ * The caller names the state it wants; whether that is allowed is decided from
+ * the state the row is actually in and the caller's role, so a client cannot
+ * skip a step or set a status directly.
+ */
+export const transitionApplicationBodySchema = z.object({
+  version: z.number().int().min(1),
+  toStatus: applicationStatusSchema,
+  /** Recorded with a settled decision; required when rejecting. */
+  note: z.string().trim().min(1).max(1000).optional(),
+  /** What happens next, for the states that wait on somebody. */
+  nextStep: z.string().trim().min(1).max(500).optional(),
+  /** ISO 8601 date or timestamp for the requested next step. */
+  deadline: z.string().trim().min(1).max(40).nullable().optional(),
 })
 
 /* -------------------------------------------------------------------------- */

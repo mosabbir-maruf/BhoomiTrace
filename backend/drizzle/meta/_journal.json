@@ -64,6 +64,27 @@
       "when": 1792261513102,
       "tag": "0008_auth_session_token_hash_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792267344759,
+      "tag": "0009_phase2_job_idempotency_and_review_action",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792268120254,
+      "tag": "0010_phase2_applications",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792268237748,
+      "tag": "0011_applications_tracking_number_seq",
+      "breakpoints": true
     }
   ]
 }
