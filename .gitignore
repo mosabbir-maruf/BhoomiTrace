@@ -11,6 +11,7 @@ dist/
 build/
 coverage/
 *.tsbuildinfo
+.pnpm-store/
 
 # Local private storage for uploaded evidence. Uploaded files and their
 # contents are never committed, never logged, and never snapshotted.
@@ -43,14 +44,38 @@ pgdata/
 /frontend/
 
 # ---------------------------------------------------------------------------
-# Agent / IDE metadata — never committed
+# Agent instructions, configurations, skills & metadata — never committed
 # ---------------------------------------------------------------------------
+# Claude instructions and case variants
+CLAUDE.md
+claude.md
+Claude.md
+[Cc][Ll][Aa][Uu][Dd][Ee].md
+[Cc][Ll][Aa][Uu][Dd][Ee].*.md
+*.[Cc][Ll][Aa][Uu][Dd][Ee].md
+
+# Agent instructions and case variants
+AGENTS.md
+agents.md
+Agents.md
+agentm.md
+AGENTM.md
+[Aa][Gg][Ee][Nn][Tt][Ss].md
+[Aa][Gg][Ee][Nn][Tt][Mm].md
+[Aa][Gg][Ee][Nn][Tt][Ss].*.md
+[Aa][Gg][Ee][Nn][Tt][Mm].*.md
+
+# Private agent configuration and skill directories/files
 .agent/
+.agents/
 .claude/
 .claude-replay.*
 .cursor/
+.cursorrules
 .gemini/
 .impeccable/
 .opencode-skills/
 .plugins/
+skills/
+skills-lock.json
 /.figma/design-context/
