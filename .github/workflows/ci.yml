@@ -76,7 +76,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-          --mount type=bind,source=${{ github.workspace }}/docker/postgres/init,target=/docker-entrypoint-initdb.d
     env:
       NODE_ENV: test
       LOG_LEVEL: silent
@@ -112,6 +111,15 @@ jobs:
               });
             })();
           '
+
+      - name: Create test database
+        run: |
+          docker run --rm --network host \
+            -e PGPASSWORD=bhoomitrace \
+            -e POSTGRES_TEST_DB=bhoomitrace_test \
+            -v "${{ github.workspace }}/docker/postgres/init:/scripts:ro" \
+            postgres:17-alpine \
+            psql -h 127.0.0.1 -U bhoomitrace -d postgres -v ON_ERROR_STOP=1 -f /scripts/01-create-test-database.sql
 
       - name: Run test suite
         run: npm test
