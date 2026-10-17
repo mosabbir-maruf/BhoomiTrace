@@ -5,6 +5,7 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+.local-storage/
 .env
 .env.*
 !.env.example

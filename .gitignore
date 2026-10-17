@@ -12,6 +12,10 @@ build/
 coverage/
 *.tsbuildinfo
 
+# Local private storage for uploaded evidence. Uploaded files and their
+# contents are never committed, never logged, and never snapshotted.
+.local-storage/
+
 # Environment files — never commit real values. Keep the *.example templates.
 .env
 .env.*
