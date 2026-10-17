@@ -4,15 +4,19 @@ import { and, eq, isNotNull, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { VALIDATION_RULES_VERSION } from '../../src/config/constants.js'
+import { auditEvents } from '../../src/db/schema/audit.js'
 import { extractions } from '../../src/db/schema/extractions.js'
+import { findings } from '../../src/db/schema/findings.js'
 import { processingJobs } from '../../src/db/schema/jobs.js'
+import { readinessReports } from '../../src/db/schema/readiness.js'
 import { MockExtractionProvider } from '../../src/extraction/mock-provider.js'
 import { JobLeaseLostError } from '../../src/lib/errors.js'
 import {
   assertJobLeaseHeld,
-  completeJob,
+  finalizeClaimedJob,
   renewJobLease,
   type ClaimedJob,
+  type JobWriteOutcome,
 } from '../../src/services/jobs.js'
 import { ExtractionWorker } from '../../src/worker/runner.js'
 import { processClaimedJob } from '../../src/worker/processor.js'
@@ -30,19 +34,24 @@ import {
 import { closeTestDatabase } from '../helpers/database.js'
 
 /**
- * Job leases: renewal, fencing, and what a worker that lost its lease may write.
+ * Job leases: renewal, expiry, fencing, and what a worker that lost its lease
+ * may write.
  *
  * A lease exists to answer one question — "is this worker still the one that owns
- * this job?" — and that answer has to hold at the moment side effects are
- * written, not merely when the work began. These tests pin down three things:
+ * this job, under a live lease?" — and that answer has to hold at the moment side
+ * effects are written, not merely when the work began. These tests pin down four
+ * things:
  *
  * 1. A running job renews its lease, so a slow job is not stolen from a healthy
- *    worker; and only the worker holding the lease can renew it.
- * 2. A worker that has lost the lease writes nothing — the check and the write
+ *    worker; and only the worker holding a *live* lease can renew it.
+ * 2. A lease that has already expired cannot be renewed back into existence, and
+ *    a worker whose lease has expired cannot pass the fence.
+ * 3. A worker that has lost the lease writes nothing — the check and the write
  *    are one transaction, so a lost lease rolls the whole set of side effects
- *    back rather than leaving half of them behind.
- * 3. When two workers genuinely race one job, exactly one set of side effects is
- *    persisted.
+ *    back rather than leaving half of them behind. This holds for extraction,
+ *    reconciliation, and readiness alike.
+ * 4. When two workers genuinely race one job, exactly one set of side effects,
+ *    and exactly one terminal audit event, are persisted.
  *
  * Most cases set the processing state directly, so a test asserts on the
  * behaviour it names rather than on the queue's global ordering. The race cases
@@ -118,6 +127,98 @@ async function loadJob(jobId: string) {
   return job
 }
 
+/**
+ * Moves a job's lease into the past without changing its owner or state.
+ *
+ * This is the state a worker leaves behind when it stops renewing — still
+ * `processing`, still named in `locked_by` — before recovery has run. It is the
+ * precise condition recovery acts on.
+ */
+async function expireLease(jobId: string): Promise<void> {
+  await api.database.orm
+    .update(processingJobs)
+    .set({ leasedUntil: new Date(Date.now() - 60_000) })
+    .where(eq(processingJobs.id, jobId))
+}
+
+/**
+ * Hands a job to a different worker, as recovery would after a lease expiry.
+ *
+ * The original worker is left believing it still holds the job, which is exactly
+ * the race the fence has to survive.
+ */
+async function reclaim(jobId: string, workerId: string): Promise<void> {
+  await api.database.orm
+    .update(processingJobs)
+    .set({
+      status: 'processing',
+      lockedBy: workerId,
+      leasedUntil: new Date(Date.now() + 60_000),
+    })
+    .where(eq(processingJobs.id, jobId))
+}
+
+/** Finalizes a claimed job the way the worker does: one atomic transaction. */
+async function finishJob(
+  jobId: string,
+  workerId: string,
+  result: Record<string, unknown> = {},
+): Promise<JobWriteOutcome> {
+  return finalizeClaimedJob(api.database, { jobId, workerId }, async () => ({
+    status: 'completed',
+    result,
+  }))
+}
+
+/** Audit rows recorded against one job, optionally filtered to one action. */
+async function auditEventsFor(
+  jobId: string,
+  action?: string,
+): Promise<{ action: string; actorId: string | null }[]> {
+  return api.database.orm
+    .select({ action: auditEvents.action, actorId: auditEvents.actorId })
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.entityType, 'processing_job'),
+        eq(auditEvents.entityId, jobId),
+        action === undefined ? undefined : eq(auditEvents.action, action),
+      ),
+    )
+}
+
+/** Enqueues a background job of any kind and returns its id. */
+async function enqueueJob(
+  kind: 'document_extraction' | 'parcel_reconciliation' | 'readiness_report',
+  parcelId: string,
+  extra: Record<string, unknown> = {},
+): Promise<string> {
+  const response = await applicant.post(`${API}/jobs`, {
+    kind,
+    parcelId,
+    ...extra,
+  })
+  expectStatus(response, 202)
+  return (response.json() as { id: string }).id
+}
+
+/** A processor context for one worker, mirroring what the runner builds. */
+function contextFor(
+  jobId: string,
+  workerId: string,
+  provider = new MockExtractionProvider(),
+) {
+  return {
+    database: api.database,
+    provider,
+    rulesVersion: VALIDATION_RULES_VERSION,
+    fence: { jobId, workerId },
+    uploadDir: api.uploadDir,
+    maxContentBytes: 5 * 1024 * 1024,
+    log: silentLogger,
+  }
+}
+
 /** Provider-produced readings for a parcel (a manual reading has no provider). */
 async function readingsFor(
   parcelId: string,
@@ -167,7 +268,7 @@ describe('renewJobLease', () => {
         workerId: 'worker-b',
         leaseSeconds: 600,
       }),
-    ).toBe(false)
+    ).toBe('not_held')
 
     // A shorter renewal is still a renewal, and it visibly moves the expiry.
     expect(
@@ -176,14 +277,14 @@ describe('renewJobLease', () => {
         workerId: 'worker-a',
         leaseSeconds: 1,
       }),
-    ).toBe(true)
+    ).toBe('renewed')
 
     const after = await loadJob(jobId)
     const afterMs = after.leasedUntil?.getTime() ?? 0
     expect(afterMs).toBeLessThan(beforeMs)
     expect(afterMs).toBeGreaterThan(Date.now() - 1_000)
 
-    await completeJob(api.database, jobId, 'worker-a', { fieldCount: 0 })
+    await finishJob(jobId, 'worker-a', { fieldCount: 0 })
   })
 
   it('refuses to renew a job that has already settled', async () => {
@@ -192,16 +293,44 @@ describe('renewJobLease', () => {
     const jobId = await enqueueExtraction(parcel.id, document.id, ['area'])
 
     await takeJob(jobId, 'worker-a')
-    await completeJob(api.database, jobId, 'worker-a', { fieldCount: 0 })
+    await finishJob(jobId, 'worker-a', { fieldCount: 0 })
 
-    // No longer `processing`, so there is no lease to renew.
+    // No longer `processing`, so there is no lease to renew — and that is a
+    // settled job, not a lost one.
     expect(
       await renewJobLease(api.database, {
         jobId,
         workerId: 'worker-a',
         leaseSeconds: 30,
       }),
-    ).toBe(false)
+    ).toBe('settled')
+  })
+
+  it('cannot resurrect a lease that has already expired', async () => {
+    const parcel = await createParcel(applicant)
+    const document = await createDocument(applicant)
+    const jobId = await enqueueExtraction(parcel.id, document.id, ['area'])
+
+    // A lease already in the past, with the job still marked `processing` — the
+    // state a worker leaves behind when it stops renewing without being
+    // recovered yet.
+    await takeJob(jobId, 'worker-a')
+    await expireLease(jobId)
+
+    expect(
+      await renewJobLease(api.database, {
+        jobId,
+        workerId: 'worker-a',
+        leaseSeconds: 30,
+      }),
+    ).toBe('not_held')
+
+    // The failed renewal wrote nothing: the lease is still expired, so recovery
+    // still owns the job.
+    const job = await loadJob(jobId)
+    expect(job.status).toBe('processing')
+    expect(job.lockedBy).toBe('worker-a')
+    expect(job.leasedUntil?.getTime() ?? 0).toBeLessThan(Date.now())
   })
 })
 
@@ -225,7 +354,21 @@ describe('assertJobLeaseHeld', () => {
       assertJobLeaseHeld(api.database.orm, { jobId, workerId: 'other' }),
     ).rejects.toBeInstanceOf(JobLeaseLostError)
 
-    await completeJob(api.database, jobId, 'holder', { fieldCount: 0 })
+    await finishJob(jobId, 'holder', { fieldCount: 0 })
+  })
+
+  it('rejects the holder once the lease has expired', async () => {
+    const parcel = await createParcel(applicant)
+    const document = await createDocument(applicant)
+    const jobId = await enqueueExtraction(parcel.id, document.id, ['area'])
+
+    await takeJob(jobId, 'holder')
+    await expireLease(jobId)
+
+    // Ownership and state alone are not enough: the lease has to be live.
+    await expect(
+      assertJobLeaseHeld(api.database.orm, { jobId, workerId: 'holder' }),
+    ).rejects.toBeInstanceOf(JobLeaseLostError)
   })
 })
 
@@ -292,9 +435,12 @@ describe('a worker that lost its lease', () => {
 
     await takeJob(jobId, 'worker-a')
 
-    // A worker that is not the lease holder cannot write a result…
+    // A worker that is not the lease holder cannot finalize the job…
     await expect(
-      completeJob(api.database, jobId, 'worker-b', { note: 'not mine' }),
+      finalizeClaimedJob(api.database, { jobId, workerId: 'worker-b' }, async () => ({
+        status: 'completed',
+        result: { note: 'not mine' },
+      })),
     ).rejects.toBeInstanceOf(JobLeaseLostError)
 
     // …and the job is untouched by that attempt.
@@ -303,14 +449,69 @@ describe('a worker that lost its lease', () => {
     expect(untouched.result).toBeNull()
     expect(untouched.lockedBy).toBe('worker-a')
 
-    // The holder can record it; a second write under the same lease cannot,
-    // because the job is no longer `processing`.
+    // The holder can finalize it; a second finalization under the same lease
+    // cannot, because the job is no longer `processing`.
     await expect(
-      completeJob(api.database, jobId, 'worker-a', { note: 'mine' }),
+      finishJob(jobId, 'worker-a', { note: 'mine' }),
     ).resolves.toMatchObject({ status: 'completed' })
     await expect(
-      completeJob(api.database, jobId, 'worker-a', { note: 'again' }),
+      finishJob(jobId, 'worker-a', { note: 'again' }),
     ).rejects.toBeInstanceOf(JobLeaseLostError)
+  })
+
+  it('cannot persist reconciliation findings once the job is reclaimed', async () => {
+    const parcel = await createParcel(applicant)
+    // Retired, so the lifecycle rule definitely has a finding to raise.
+    expectStatus(
+      await applicant.post(`${API}/parcels/${parcel.id}/retire`, {
+        version: parcel.version,
+        reason: 'Superseded by a corrected filing.',
+      }),
+      200,
+    )
+    const jobId = await enqueueJob('parcel_reconciliation', parcel.id)
+    const claimed = await takeJob(jobId, 'worker-a')
+    await reclaim(jobId, 'worker-b')
+
+    const outcome = await processClaimedJob(
+      contextFor(jobId, 'worker-a'),
+      claimed,
+    ).catch((error: unknown) => error)
+
+    expect(outcome).toBeInstanceOf(JobLeaseLostError)
+
+    // No finding was raised by the stale worker, and the job is still worker B's.
+    const findingsForParcel = await api.database.orm
+      .select({ id: findings.id })
+      .from(findings)
+      .where(eq(findings.parcelId, parcel.id))
+    expect(findingsForParcel).toEqual([])
+    const stillHeld = await loadJob(jobId)
+    expect(stillHeld.status).toBe('processing')
+    expect(stillHeld.lockedBy).toBe('worker-b')
+  })
+
+  it('cannot persist a readiness report once the job is reclaimed', async () => {
+    const parcel = await createParcel(applicant)
+    const jobId = await enqueueJob('readiness_report', parcel.id)
+    const claimed = await takeJob(jobId, 'worker-a')
+    await reclaim(jobId, 'worker-b')
+
+    const outcome = await processClaimedJob(
+      contextFor(jobId, 'worker-a'),
+      claimed,
+    ).catch((error: unknown) => error)
+
+    expect(outcome).toBeInstanceOf(JobLeaseLostError)
+
+    const reports = await api.database.orm
+      .select({ id: readinessReports.id })
+      .from(readinessReports)
+      .where(eq(readinessReports.parcelId, parcel.id))
+    expect(reports).toEqual([])
+    const stillHeld = await loadJob(jobId)
+    expect(stillHeld.status).toBe('processing')
+    expect(stillHeld.lockedBy).toBe('worker-b')
   })
 })
 
@@ -326,7 +527,9 @@ describe('two workers racing one job', () => {
 
     // A provider that takes long enough for a second worker to start while the
     // first is still reading — exactly the situation a fixed, too-short lease
-    // would produce in production.
+    // would produce in production. Only calls naming this test's document are
+    // counted and slowed: a worker drains the whole queue, and this suite shares
+    // one database that accumulates rows across runs.
     let extractCalls = 0
     const inner = new MockExtractionProvider({
       model: 'slow-reader',
@@ -341,10 +544,12 @@ describe('two workers racing one job', () => {
       readsDocumentContent: inner.readsDocumentContent,
       supportedMediaTypes: inner.supportedMediaTypes,
       isConfigured: () => true,
-      extract: async (...args: Parameters<typeof inner.extract>) => {
-        extractCalls += 1
-        await new Promise((resolve) => setTimeout(resolve, 400))
-        return inner.extract(...args)
+      extract: async (request: Parameters<typeof inner.extract>[0]) => {
+        if (request.sourceDocumentId === document.id) {
+          extractCalls += 1
+          await new Promise((resolve) => setTimeout(resolve, 400))
+        }
+        return inner.extract(request)
       },
     }
 
@@ -408,6 +613,13 @@ describe('two workers racing one job', () => {
     // renewing its lease.
     expect(settled.attemptCount).toBe(1)
     expect(extractCalls).toBe(1)
+
+    // Exactly one terminal transition, and exactly one audit row for it: the
+    // winning worker finalized once, and the loser never finalized at all.
+    expect(await auditEventsFor(jobId, 'job.completed')).toHaveLength(1)
+    expect(await auditEventsFor(jobId, 'job.review_required')).toHaveLength(0)
+    expect(await auditEventsFor(jobId, 'job.failed')).toHaveLength(0)
+    expect(await auditEventsFor(jobId, 'job.retry_scheduled')).toHaveLength(0)
   })
 
   it('recovers a job whose worker stopped renewing, without duplicating readings', async () => {
