@@ -15,6 +15,13 @@
       "when": 1792254636740,
       "tag": "0001_append_only_guards_and_timestamps",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792255235879,
+      "tag": "0002_append_only_fk_restrict",
+      "breakpoints": true
     }
   ]
 }

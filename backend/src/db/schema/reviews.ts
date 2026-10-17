@@ -21,16 +21,23 @@ import { users } from './users.js'
  * new row, so review history stays intact.
  *
  * Every decision must concern either a finding or an extraction.
+ *
+ * All foreign keys held by this table are `ON DELETE RESTRICT`. A `CASCADE` or
+ * `SET NULL` action here would make PostgreSQL mutate or remove an append-only
+ * row as a side effect of deleting something else, which the append-only trigger
+ * rejects. `RESTRICT` states the intended policy directly: a decision's subject
+ * and its author cannot be deleted while the decision exists. Subjects that must
+ * "go away" are retired with a status column instead of being hard-deleted.
  */
 export const reviewDecisions = pgTable(
   'review_decisions',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     findingId: uuid('finding_id').references(() => findings.id, {
-      onDelete: 'cascade',
+      onDelete: 'restrict',
     }),
     extractionId: uuid('extraction_id').references(() => extractions.id, {
-      onDelete: 'set null',
+      onDelete: 'restrict',
     }),
     reviewerId: uuid('reviewer_id')
       .notNull()

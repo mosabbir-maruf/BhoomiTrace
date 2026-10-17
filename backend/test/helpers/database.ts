@@ -80,6 +80,15 @@ export function errorChainMessage(error: unknown): string {
   return parts.join(' | ')
 }
 
+/** Returns the first row of a statement result, failing when there is none. */
+export async function firstOrThrow<T>(rows: readonly T[]): Promise<T> {
+  const [row] = rows
+  if (row === undefined) {
+    throw new Error('Expected the statement to return a row.')
+  }
+  return row
+}
+
 /** Awaits an operation that must fail, returning the combined error message. */
 export async function expectRejection(
   operation: () => Promise<unknown>,

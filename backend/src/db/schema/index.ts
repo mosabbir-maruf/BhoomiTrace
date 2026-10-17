@@ -2,6 +2,27 @@
  * Barrel module for the database schema.
  *
  * Drizzle Kit reads this file, so every table must be re-exported here.
+ *
+ * ## Deletion policy
+ *
+ * `review_decisions` and `audit_events` are append-only, and PostgreSQL enforces
+ * that with triggers. A referential action that would rewrite or remove one of
+ * their rows therefore cannot be allowed, or the two mechanisms would contradict
+ * each other. The resulting policy is:
+ *
+ * - Every foreign key held by an append-only table is `ON DELETE RESTRICT`, and
+ *   nothing references an append-only table with `CASCADE` or `SET NULL`.
+ * - Records that carry history (`users`, `parcels`) are never hard-deleted.
+ *   Accounts are deactivated with `users.status = 'suspended'`; parcels are
+ *   retained as records. Hard deletion is reserved for records without history.
+ * - Owned attributes with no independent meaning (`parcel_dags`) cascade with
+ *   their parent.
+ * - Derived data a reviewer has not yet acted on (`extractions`, `findings`)
+ *   cascades with its parcel. Once review history exists, that cascade is
+ *   blocked by the `RESTRICT` keys above, so history always wins.
+ * - `audit_events.entity_type` / `entity_id` are intentionally *not* foreign
+ *   keys: an audit entry records what happened and must outlive the entity it
+ *   describes.
  */
 
 export * from './enums.js'

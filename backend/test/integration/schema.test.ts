@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { readdirSync } from 'node:fs'
 
 import { eq, sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import type { Database } from '../../src/db/client.js'
+import { DEFAULT_MIGRATIONS_FOLDER } from '../../src/db/migrate.js'
 import { auditEvents } from '../../src/db/schema/audit.js'
 import { sourceDocuments } from '../../src/db/schema/documents.js'
 import { extractions } from '../../src/db/schema/extractions.js'
@@ -14,6 +16,7 @@ import { users } from '../../src/db/schema/users.js'
 import {
   closeTestDatabase,
   expectRejection,
+  firstOrThrow,
   initializeTestDatabase,
 } from '../helpers/database.js'
 
@@ -45,12 +48,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeTestDatabase()
 })
-
-async function firstOrThrow<T>(rows: readonly T[]): Promise<T> {
-  const [row] = rows
-  if (row === undefined) throw new Error('Expected the statement to return a row.')
-  return row
-}
 
 function syntheticParcelValues(
   khatianNumber: string,
@@ -118,12 +115,16 @@ describe('migrations', () => {
     )
   })
 
-  it('applies each migration exactly once', async () => {
+  it('applies each committed migration exactly once', async () => {
+    const committedMigrations = readdirSync(DEFAULT_MIGRATIONS_FOLDER).filter(
+      (entry) => entry.endsWith('.sql'),
+    )
     const result = await database.pool.query<{ count: string }>(
       `select count(*)::text as count from drizzle.__drizzle_migrations`,
     )
 
-    expect(Number(result.rows[0]?.count)).toBe(2)
+    expect(committedMigrations.length).toBeGreaterThanOrEqual(3)
+    expect(Number(result.rows[0]?.count)).toBe(committedMigrations.length)
   })
 })
 
