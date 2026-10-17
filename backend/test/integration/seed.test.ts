@@ -87,6 +87,7 @@ describe('seedSyntheticData', () => {
         .insert(parcels)
         .values({
           survey: 'CS',
+          origin: 'synthetic_demo',
           district: `RepairDistrict-${randomUUID()}`,
           upazila: 'RepairUpazila',
           mouza: 'RepairMouza',

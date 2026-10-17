@@ -29,14 +29,27 @@
  * - `audit_events.entity_type` / `entity_id` are intentionally *not* foreign
  *   keys: an audit entry records what happened and must outlive the entity it
  *   describes.
+ * - Operational tables that carry no history (`auth_sessions`,
+ *   `document_pages`, `readiness_checklist_items`) cascade from their parent.
+ *   Losing a session, a page, or a checklist row destroys no evidence: a
+ *   document whose pages could be lost this way is already undeletable, because
+ *   `extractions.source_document_id` restricts it.
+ * - Work and report tables (`processing_jobs`, `readiness_reports`) restrict
+ *   their parcel and document references, so an operational record never
+ *   outlives an explanation of what it was about.
  */
 
 export * from './enums.js'
+export * from './types.js'
 export * from './users.js'
+export * from './sessions.js'
 export * from './parcels.js'
 export * from './lineage.js'
 export * from './documents.js'
+export * from './pages.js'
 export * from './extractions.js'
 export * from './findings.js'
 export * from './reviews.js'
 export * from './audit.js'
+export * from './jobs.js'
+export * from './readiness.js'

@@ -56,6 +56,7 @@ async function insertParcel(): Promise<typeof parcels.$inferSelect> {
     .insert(parcels)
     .values({
       survey: 'RS',
+      origin: 'synthetic_demo',
       district: `PolicyDistrict-${RUN}`,
       upazila: 'PolicyUpazila',
       mouza: 'PolicyMouza',
@@ -89,7 +90,7 @@ async function insertExtraction(
 async function insertDocument(): Promise<typeof sourceDocuments.$inferSelect> {
   const rows = await database.orm
     .insert(sourceDocuments)
-    .values({ title: `Synthetic policy document ${randomUUID()}` })
+    .values({ title: `Synthetic policy document ${randomUUID()}`, origin: 'synthetic_demo' })
     .returning()
   return firstOrThrow(rows)
 }
@@ -277,7 +278,7 @@ describe('unreferenced records can still be deleted', () => {
     const author = await insertUser()
     const documentRows = await database.orm
       .insert(sourceDocuments)
-      .values({ title: 'Synthetic document', createdBy: author.id })
+      .values({ title: 'Synthetic document', origin: 'synthetic_demo', createdBy: author.id })
       .returning()
     const document = await firstOrThrow(documentRows)
 

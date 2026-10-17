@@ -3,6 +3,8 @@ import {
   boolean,
   check,
   index,
+  integer,
+  jsonb,
   numeric,
   pgTable,
   text,
@@ -12,7 +14,9 @@ import {
 
 import { extractionFieldEnum, extractionReviewStatusEnum } from './enums.js'
 import { sourceDocuments } from './documents.js'
+import { documentPages } from './pages.js'
 import { parcels } from './parcels.js'
+import type { BoundingBox } from './types.js'
 import { users } from './users.js'
 
 /**
@@ -30,6 +34,11 @@ import { users } from './users.js'
  * would survive with no way to say where the value came from. Documents are
  * retired by status instead of being hard-deleted. See the deletion policy in
  * `./index.js`.
+ *
+ * `page_id` and `bounding_box` are provenance too, and are populated only from
+ * what the provider actually reported. `provider`/`provider_model` name the
+ * reader that produced the value, so a mock read is never mistakable for a real
+ * one.
  */
 export const extractions = pgTable(
   'extractions',
@@ -42,6 +51,10 @@ export const extractions = pgTable(
       () => sourceDocuments.id,
       { onDelete: 'restrict' },
     ),
+    /** The specific page inside the document, when the provider named one. */
+    pageId: uuid('page_id').references(() => documentPages.id, {
+      onDelete: 'restrict',
+    }),
     field: extractionFieldEnum('field').notNull(),
     recordedValue: text('recorded_value').notNull(),
     reviewedValue: text('reviewed_value'),
@@ -53,10 +66,20 @@ export const extractions = pgTable(
     isUnclear: boolean('is_unclear').notNull().default(false),
     /** Human-readable location within the document, e.g. "তফসিল, ঘর ৩". */
     pageReference: text('page_reference'),
+    /** Normalised source region, only when the provider reported one. */
+    boundingBox: jsonb('bounding_box').$type<BoundingBox>(),
+    /** Name of the extraction provider that produced this read. */
+    provider: text('provider'),
+    /** Model identifier reported by that provider, when it names one. */
+    providerModel: text('provider_model'),
+    /** When the provider produced the read (not when the row was written). */
+    extractedAt: timestamp('extracted_at', { withTimezone: true }),
     reviewedBy: uuid('reviewed_by').references(() => users.id, {
       onDelete: 'set null',
     }),
     reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    /** Optimistic-concurrency token, incremented by a database trigger. */
+    version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -69,6 +92,7 @@ export const extractions = pgTable(
     index('extractions_review_status_idx').on(table.reviewStatus),
     // Supports the RESTRICT check performed when a source document is deleted.
     index('extractions_source_document_idx').on(table.sourceDocumentId),
+    index('extractions_page_idx').on(table.pageId),
     check(
       'extractions_confidence_range',
       sql`${table.confidence} is null or (${table.confidence} >= 0 and ${table.confidence} <= 1)`,
@@ -77,6 +101,7 @@ export const extractions = pgTable(
       'extractions_reviewed_value_consistency',
       sql`(${table.reviewStatus} = 'corrected') = (${table.reviewedValue} is not null)`,
     ),
+    check('extractions_version_positive', sql`${table.version} >= 1`),
   ],
 )
 

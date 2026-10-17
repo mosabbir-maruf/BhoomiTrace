@@ -100,3 +100,51 @@ export const reviewOutcomeEnum = pgEnum('review_outcome', [
   'correction',
   'needs_review',
 ])
+
+/**
+ * Where a record came from.
+ *
+ * `synthetic_demo` marks the seeded demo dataset; `user_created` marks anything
+ * a real account created through the API. The distinction is required so demo
+ * fixtures and user-owned records can never be confused, and so that demo data
+ * is not treated as somebody's filing. There is deliberately no database default
+ * for columns using this type: a writer must state which it is, rather than
+ * inheriting a classification silently.
+ */
+export const dataOriginEnum = pgEnum('data_origin', [
+  'synthetic_demo',
+  'user_created',
+])
+
+/** Kind of background work a processing job represents. */
+export const processingJobKindEnum = pgEnum('processing_job_kind', [
+  'document_extraction',
+  'parcel_reconciliation',
+  'readiness_report',
+])
+
+/** Lifecycle of a processing job. Transitions are enforced in the service. */
+export const processingJobStatusEnum = pgEnum('processing_job_status', [
+  'queued',
+  'processing',
+  'review_required',
+  'completed',
+  'failed',
+  'retry_pending',
+  'cancelled',
+])
+
+/** Overall verdict of a mutation-readiness report. */
+export const readinessOutcomeEnum = pgEnum('readiness_outcome', [
+  'ready_for_review',
+  'needs_review',
+  'not_ready',
+])
+
+/** Outcome of one checklist item inside a readiness report. */
+export const checklistOutcomeEnum = pgEnum('checklist_outcome', [
+  'pass',
+  'fail',
+  'needs_review',
+  'not_applicable',
+])

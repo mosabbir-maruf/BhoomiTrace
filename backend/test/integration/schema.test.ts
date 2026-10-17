@@ -54,6 +54,7 @@ function syntheticParcelValues(
 ): typeof parcels.$inferInsert {
   return {
     survey: 'BS',
+    origin: 'synthetic_demo',
     district: `TestDistrict-${RUN}`,
     upazila: 'TestUpazila',
     mouza: 'TestMouza',
@@ -291,7 +292,11 @@ describe('source documents', () => {
   it('accepts a well-formed SHA-256 checksum', async () => {
     const rows = await database.orm
       .insert(sourceDocuments)
-      .values({ title: 'Synthetic check', checksumSha256: 'a'.repeat(64) })
+      .values({
+        title: 'Synthetic check',
+        origin: 'synthetic_demo',
+        checksumSha256: 'a'.repeat(64),
+      })
       .returning()
 
     expect((await firstOrThrow(rows)).checksumSha256).toHaveLength(64)
@@ -302,7 +307,11 @@ describe('source documents', () => {
       () =>
         database.orm
           .insert(sourceDocuments)
-          .values({ title: 'Synthetic check', checksumSha256: 'not-a-hash' }),
+          .values({
+            title: 'Synthetic check',
+            origin: 'synthetic_demo',
+            checksumSha256: 'not-a-hash',
+          }),
       'source_documents_checksum_shape',
     )
   })

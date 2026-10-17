@@ -6,6 +6,7 @@ import { sourceDocuments } from './schema/documents.js'
 import { extractions } from './schema/extractions.js'
 import { findings } from './schema/findings.js'
 import { parcelLineage } from './schema/lineage.js'
+import { documentPages } from './schema/pages.js'
 import { parcelDags, parcels } from './schema/parcels.js'
 
 /**
@@ -31,6 +32,7 @@ export interface SeedSummary {
   parcelDags: number
   lineageLinks: number
   sourceDocuments: number
+  documentPages: number
   extractions: number
   findings: number
   auditEvents: number
@@ -78,11 +80,17 @@ const LINEAGE = {
 
 const SOURCE_DOCUMENT_ID = 'b1000000-0000-4000-8000-000000000001'
 
+/** The single page of the demo source document. */
+export const SOURCE_DOCUMENT_PAGE_ID = 'b2000000-0000-4000-8000-000000000001'
+
 const BASE_LOCATION = {
   district: 'টাঙ্গাইল',
   upazila: 'মির্জাপুর',
   mouza: 'শালবন',
   jlNumber: '43',
+  // Every seeded parcel is demo data and belongs to no account.
+  origin: 'synthetic_demo',
+  ownerId: null,
 } as const
 
 export async function seedSyntheticData(
@@ -205,9 +213,26 @@ export async function seedSyntheticData(
           id: SOURCE_DOCUMENT_ID,
           title: 'শালবন মৌজা, আরএস খতিয়ান ১০৪ (নমুনা নথি)',
           kind: 'synthetic_demo',
+          origin: 'synthetic_demo',
+          ownerId: null,
           reference: 'DEMO/RS/শালবন/034',
           pageCount: 1,
           status: 'submitted',
+        },
+      ])
+      .onConflictDoNothing()
+
+    // The demo document has exactly one page. No geometry is recorded, because
+    // the demo fixture has no real page image to measure — inventing a
+    // bounding box would make an unevidenced claim look verified.
+    await tx
+      .insert(documentPages)
+      .values([
+        {
+          id: SOURCE_DOCUMENT_PAGE_ID,
+          sourceDocumentId: SOURCE_DOCUMENT_ID,
+          pageNumber: 1,
+          label: 'স্বত্বের বিবরণ',
         },
       ])
       .onConflictDoNothing()
@@ -219,6 +244,7 @@ export async function seedSyntheticData(
           id: 'c1000000-0000-4000-8000-000000000001',
           parcelId: PARCEL.rs104,
           sourceDocumentId: SOURCE_DOCUMENT_ID,
+          pageId: SOURCE_DOCUMENT_PAGE_ID,
           field: 'khatian',
           recordedValue: '104',
           pageReference: 'শিরোনাম, ঘর ১',
@@ -227,6 +253,7 @@ export async function seedSyntheticData(
           id: 'c1000000-0000-4000-8000-000000000002',
           parcelId: PARCEL.rs104,
           sourceDocumentId: SOURCE_DOCUMENT_ID,
+          pageId: SOURCE_DOCUMENT_PAGE_ID,
           field: 'mouza',
           recordedValue: 'শালবন',
           pageReference: 'শিরোনাম, ঘর ২',
@@ -235,6 +262,7 @@ export async function seedSyntheticData(
           id: 'c1000000-0000-4000-8000-000000000003',
           parcelId: PARCEL.rs104,
           sourceDocumentId: SOURCE_DOCUMENT_ID,
+          pageId: SOURCE_DOCUMENT_PAGE_ID,
           field: 'dag',
           recordedValue: '341',
           pageReference: 'তফসিল, ঘর ১',
@@ -243,6 +271,7 @@ export async function seedSyntheticData(
           id: 'c1000000-0000-4000-8000-000000000004',
           parcelId: PARCEL.rs104,
           sourceDocumentId: SOURCE_DOCUMENT_ID,
+          pageId: SOURCE_DOCUMENT_PAGE_ID,
           field: 'area',
           recordedValue: '125.0000',
           pageReference: 'তফসিল, ঘর ৩',
@@ -251,6 +280,7 @@ export async function seedSyntheticData(
           id: 'c1000000-0000-4000-8000-000000000005',
           parcelId: PARCEL.rs104,
           sourceDocumentId: SOURCE_DOCUMENT_ID,
+          pageId: SOURCE_DOCUMENT_PAGE_ID,
           field: 'share',
           recordedValue: '1/2',
           pageReference: 'স্বত্বের বিবরণ, ঘর ২',
@@ -318,6 +348,7 @@ export async function seedSyntheticData(
       parcelDags: 5,
       lineageLinks: 4,
       sourceDocuments: 1,
+      documentPages: 1,
       extractions: 6,
       findings: 1,
       auditEvents: 1,
