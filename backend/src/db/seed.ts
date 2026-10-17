@@ -1,3 +1,5 @@
+import { and, eq, sql } from 'drizzle-orm'
+
 import type { Database } from './client.js'
 import { auditEvents } from './schema/audit.js'
 import { sourceDocuments } from './schema/documents.js'
@@ -13,6 +15,10 @@ import { parcelDags, parcels } from './schema/parcels.js'
  * Nothing here refers to a real person, parcel, or government record, and no
  * value is presented as an OCR or model output. Fixed UUIDs make the seed
  * idempotent: running it twice changes nothing.
+ *
+ * The suite also performs one narrowly scoped repair (see
+ * `SUPERSEDED_FINDING_FRAGMENT`) so that a database seeded before a fixture
+ * wording correction converges without resetting the volume.
  */
 
 export interface SeedOptions {
@@ -28,6 +34,11 @@ export interface SeedSummary {
   extractions: number
   findings: number
   auditEvents: number
+  /**
+   * Rows corrected by the superseded-fixture repair during this run. Zero on a
+   * database that is already up to date, which is what makes a re-run a no-op.
+   */
+  repairedFindings: number
 }
 
 const PARCEL = {
@@ -37,6 +48,18 @@ const PARCEL = {
   bs208: 'a1000000-0000-4000-8000-000000000004',
   bs209: 'a1000000-0000-4000-8000-000000000005',
 } as const
+
+/** The single synthetic finding, addressed by its fixed identifier. */
+export const SYNTHETIC_FINDING_ID = 'd1000000-0000-4000-8000-000000000001'
+
+/**
+ * Sentence that only ever appeared in the superseded revision of this fixture.
+ * It is used both to recognise a stale row and, in tests, to recreate one.
+ */
+export const SUPERSEDED_FINDING_FRAGMENT = 'দুই খতিয়ানের যোগফল ১২৫ নয়'
+
+export const SYNTHETIC_FINDING_EXPLANATION =
+  'আরএস খতিয়ান ১০৪-এ ১২৫.০০০০ দশমিক এবং বিএস খতিয়ান ২০৮-এ ৭৫.০০০০ দশমিক লেখা আছে। বিএস খতিয়ান ২০৯-এ ৫০.০০০০ দশমিক থাকলেও সেই সংযোগ নমুনায় প্রমাণিত নয়, তাই ১২৫ দশমিকের বাকি অংশ কোথায় গেল তা মিলিয়ে দেখা দরকার।'
 
 const DAG = {
   cs42: 'a2000000-0000-4000-8000-000000000001',
@@ -249,19 +272,34 @@ export async function seedSyntheticData(
       .insert(findings)
       .values([
         {
-          id: 'd1000000-0000-4000-8000-000000000001',
+          id: SYNTHETIC_FINDING_ID,
           parcelId: PARCEL.rs104,
           relatedParcelId: PARCEL.bs208,
           kind: 'area_mismatch',
           severity: 'medium',
           status: 'open',
           title: 'আরএস ১০৪ ও বিএস ২০৮-এর জমির পরিমাণ মিলছে না',
-          explanation:
-            'আরএস খতিয়ান ১০৪-এ ১২৫.০০০০ দশমিক এবং বিএস খতিয়ান ২০৮-এ ৭৫.০০০০ দশমিক লেখা আছে। বিএস খতিয়ান ২০৯-এ ৫০.০০০০ দশমিক থাকলেও সেই সংযোগ নমুনায় প্রমাণিত নয়, তাই ১২৫ দশমিকের বাকি অংশ কোথায় গেল তা মিলিয়ে দেখা দরকার।',
+          explanation: SYNTHETIC_FINDING_EXPLANATION,
           evidenceReference: 'RS পৃষ্ঠা ০৩৪ / BS পৃষ্ঠা ০৪১',
         },
       ])
       .onConflictDoNothing()
+
+    // Narrow, idempotent repair for databases seeded before the wording of this
+    // fixture was corrected. It is scoped to the single fixed synthetic id *and*
+    // to rows that still contain the superseded sentence, so it can never
+    // overwrite a row that has since been edited, and it becomes a no-op after
+    // the first successful run.
+    const repaired = await tx
+      .update(findings)
+      .set({ explanation: SYNTHETIC_FINDING_EXPLANATION })
+      .where(
+        and(
+          eq(findings.id, SYNTHETIC_FINDING_ID),
+          sql`${findings.explanation} like ${`%${SUPERSEDED_FINDING_FRAGMENT}%`}`,
+        ),
+      )
+      .returning({ id: findings.id })
 
     await tx
       .insert(auditEvents)
@@ -283,6 +321,7 @@ export async function seedSyntheticData(
       extractions: 6,
       findings: 1,
       auditEvents: 1,
+      repairedFindings: repaired.length,
     } satisfies SeedSummary
   })
 }

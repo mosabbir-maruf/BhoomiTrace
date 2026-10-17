@@ -1,12 +1,24 @@
+import { randomUUID } from 'node:crypto'
+
 import { eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import type { Database } from '../../src/db/client.js'
+import { findings } from '../../src/db/schema/findings.js'
 import { parcelLineage } from '../../src/db/schema/lineage.js'
 import { parcels } from '../../src/db/schema/parcels.js'
-import { seedSyntheticData } from '../../src/db/seed.js'
+import {
+  seedSyntheticData,
+  SUPERSEDED_FINDING_FRAGMENT,
+  SYNTHETIC_FINDING_EXPLANATION,
+  SYNTHETIC_FINDING_ID,
+} from '../../src/db/seed.js'
 import { areasEqual, compareAreas, sumAreas } from '../../src/lib/rational.js'
-import { closeTestDatabase, initializeTestDatabase } from '../helpers/database.js'
+import {
+  closeTestDatabase,
+  firstOrThrow,
+  initializeTestDatabase,
+} from '../helpers/database.js'
 
 /** The seed only ever writes to this mouza, so it is safe to count on. */
 const SEED_MOUZA = 'শালবন'
@@ -21,6 +33,16 @@ afterAll(async () => {
   await closeTestDatabase()
 })
 
+async function selectFinding(
+  id: string,
+): Promise<typeof findings.$inferSelect | undefined> {
+  const rows = await database.orm
+    .select()
+    .from(findings)
+    .where(eq(findings.id, id))
+  return rows[0]
+}
+
 describe('seedSyntheticData', () => {
   it('refuses to run against a production database', async () => {
     await expect(
@@ -28,12 +50,17 @@ describe('seedSyntheticData', () => {
     ).rejects.toThrow(/production/i)
   })
 
-  it('is idempotent: running twice changes nothing', async () => {
+  it('is idempotent: once repairs are applied, re-running changes nothing', async () => {
+    // Warm-up absorbs a possible one-time repair of a superseded fixture so the
+    // two runs compared below are both steady-state.
+    await seedSyntheticData(database, { nodeEnv: 'test' })
+
     const first = await seedSyntheticData(database, { nodeEnv: 'test' })
     const second = await seedSyntheticData(database, { nodeEnv: 'test' })
 
     expect(second).toEqual(first)
-    expect(first.parcels).toBe(5)
+    expect(second.repairedFindings).toBe(0)
+    expect(second.parcels).toBe(5)
 
     const seededParcels = await database.orm
       .select()
@@ -43,6 +70,60 @@ describe('seedSyntheticData', () => {
 
     const links = await database.orm.select().from(parcelLineage)
     expect(links.length).toBeGreaterThanOrEqual(first.lineageLinks)
+  })
+
+  it('repairs the superseded synthetic finding and preserves unrelated rows', async () => {
+    await seedSyntheticData(database, { nodeEnv: 'test' })
+
+    // Recreate the stale state on the fixed synthetic identifier.
+    await database.orm
+      .update(findings)
+      .set({ explanation: `পুরনো লেখা: ${SUPERSEDED_FINDING_FRAGMENT}` })
+      .where(eq(findings.id, SYNTHETIC_FINDING_ID))
+
+    // An unrelated synthetic row that the repair must not touch.
+    const unrelatedParcel = await firstOrThrow(
+      await database.orm
+        .insert(parcels)
+        .values({
+          survey: 'CS',
+          district: `RepairDistrict-${randomUUID()}`,
+          upazila: 'RepairUpazila',
+          mouza: 'RepairMouza',
+          jlNumber: '43',
+          khatianNumber: '1',
+          areaDecimal: '1.0000',
+        })
+        .returning(),
+    )
+    const unrelated = await firstOrThrow(
+      await database.orm
+        .insert(findings)
+        .values({
+          parcelId: unrelatedParcel.id,
+          kind: 'other',
+          title: 'Unrelated synthetic finding',
+          explanation: 'Untouched by the repair.',
+        })
+        .returning(),
+    )
+
+    const repaired = await seedSyntheticData(database, { nodeEnv: 'test' })
+    expect(repaired.repairedFindings).toBe(1)
+
+    const fixed = await selectFinding(SYNTHETIC_FINDING_ID)
+    expect(fixed?.explanation).toBe(SYNTHETIC_FINDING_EXPLANATION)
+
+    const unrelatedAfter = await selectFinding(unrelated.id)
+    expect(unrelatedAfter?.explanation).toBe('Untouched by the repair.')
+    expect(unrelatedAfter?.title).toBe('Unrelated synthetic finding')
+
+    // A second run performs no repair and leaves the corrected text in place.
+    const again = await seedSyntheticData(database, { nodeEnv: 'test' })
+    expect(again.repairedFindings).toBe(0)
+
+    const fixedAgain = await selectFinding(SYNTHETIC_FINDING_ID)
+    expect(fixedAgain?.explanation).toBe(SYNTHETIC_FINDING_EXPLANATION)
   })
 
   it('reconciles the synthetic split exactly', async () => {
