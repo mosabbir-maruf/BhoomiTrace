@@ -11,7 +11,6 @@ import {
   type RuleResult,
 } from '../validation/rules.js'
 import { AuditActions, recordAuditEvent } from './audit.js'
-import { assertJobLeaseHeld, type JobFence } from './jobs.js'
 import { loadVisibleParcel } from './parcels.js'
 
 /**
@@ -47,6 +46,26 @@ export interface ReconciliationResult {
   existingOpenRules: string[]
 }
 
+/**
+ * The read-only half of reconciliation: run the rules and decide what to raise.
+ *
+ * Nothing is written here, so it can run before a write transaction is opened.
+ * That is what lets a worker evaluate outside a transaction and then persist the
+ * findings and finalize the job atomically, in one transaction.
+ */
+export interface ReconciliationEvaluation {
+  parcelId: string
+  rulesVersion: string
+  rules: RuleResult[]
+  summary: {
+    outcome: 'ready_for_review' | 'needs_review' | 'not_ready'
+    counts: Record<string, number>
+    summary: string
+  }
+  /** Non-passing rules that carry a finding kind: what is to be raised. */
+  actionable: RuleResult[]
+}
+
 export interface ReconcileInput {
   user: User
   parcelId: string
@@ -54,21 +73,23 @@ export interface ReconcileInput {
   persist: boolean
   requestId?: string | null
   rulesVersion: string
-  /**
-   * When present, the write is fenced on this worker's job lease: the guard is
-   * the first statement of the transaction, so a worker that lost its job
-   * commits nothing.
-   */
-  fence?: JobFence
 }
 
-/** Runs the rules and, optionally, raises findings for what failed. */
-export async function reconcileParcel(
+/** The executor surface the findings write needs. */
+export type ReconciliationWriter = Pick<Database['orm'], 'select' | 'insert'>
+
+/**
+ * Runs the rules for a parcel the caller can see, writing nothing.
+ *
+ * Visibility is checked first: reconciling a record the caller cannot see is a
+ * 404, not a silent success. The result is a plain value, so it can be produced
+ * before any transaction is opened, and the write can then happen under a job's
+ * lease fence without this read being inside that transaction.
+ */
+export async function evaluateParcelReconciliation(
   database: Database,
-  input: ReconcileInput,
-): Promise<ReconciliationResult> {
-  // Visibility first: reconciling a record the caller cannot see is a 404, not
-  // a silent success.
+  input: { user: User; parcelId: string; rulesVersion: string },
+): Promise<ReconciliationEvaluation> {
   await loadVisibleParcel(database, input.user, input.parcelId)
 
   const context = await loadReconciliationContext(database, input.parcelId)
@@ -79,31 +100,45 @@ export async function reconcileParcel(
   const rules = await evaluateReconciliation(database, context)
   const summary = summariseOutcomes(rules)
 
-  if (!input.persist) {
-    return {
-      parcelId: input.parcelId,
-      rulesVersion: input.rulesVersion,
-      rules,
-      summary: {
-        outcome: summary.outcome,
-        counts: { ...summary.counts },
-        summary: summary.summary,
-      },
-      raisedFindings: [],
-      existingOpenRules: [],
-    }
+  return {
+    parcelId: input.parcelId,
+    rulesVersion: input.rulesVersion,
+    rules,
+    summary: {
+      outcome: summary.outcome,
+      counts: { ...summary.counts },
+      summary: summary.summary,
+    },
+    actionable: rules.filter(
+      (rule) => rule.outcome !== 'pass' && rule.findingKind !== null,
+    ),
   }
+}
 
-  const actionable = rules.filter(
-    (rule) => rule.outcome !== 'pass' && rule.findingKind !== null,
-  )
-
-  const alreadyOpen = await database.orm
+/**
+ * Raises findings for an evaluation, inside the caller's transaction.
+ *
+ * The set of already-open rules is read here, in the same transaction as the
+ * inserts, so "this rule is already open, so do not raise it again" is never
+ * decided from a snapshot taken before the transaction began.
+ */
+export async function persistReconciliationFindings(
+  tx: ReconciliationWriter,
+  input: {
+    user: User
+    evaluation: ReconciliationEvaluation
+    requestId?: string | null
+  },
+): Promise<{
+  raisedFindings: { id: string; ruleCode: string; title: string }[]
+  existingOpenRules: string[]
+}> {
+  const alreadyOpen = await tx
     .select({ ruleCode: findings.ruleCode })
     .from(findings)
     .where(
       and(
-        eq(findings.parcelId, input.parcelId),
+        eq(findings.parcelId, input.evaluation.parcelId),
         inArray(findings.status, ['open', 'under_review']),
       ),
     )
@@ -117,70 +152,92 @@ export async function reconcileParcel(
   const raised: { id: string; ruleCode: string; title: string }[] = []
   const skipped: string[] = []
 
-  await database.orm.transaction(async (tx) => {
-    // The fence, when a worker is driving this: if the job has moved on, the
-    // findings below are never written.
-    if (input.fence !== undefined) {
-      await assertJobLeaseHeld(tx, input.fence)
+  for (const rule of input.evaluation.actionable) {
+    if (openRuleCodes.has(rule.ruleCode)) {
+      skipped.push(rule.ruleCode)
+      continue
     }
 
-    for (const rule of actionable) {
-      if (openRuleCodes.has(rule.ruleCode)) {
-        skipped.push(rule.ruleCode)
-        continue
-      }
-
-      const inserted = await tx
-        .insert(findings)
-        .values({
-          parcelId: input.parcelId,
-          relatedParcelId: null,
-          extractionId: null,
-          kind: rule.findingKind ?? 'other',
-          severity: rule.severity,
-          status: 'open',
-          title: rule.title,
-          explanation: rule.explanation,
-          evidenceReference: rule.evidenceReference,
-          ruleCode: rule.ruleCode,
-        })
-        .returning({ id: findings.id })
-
-      const finding = inserted[0]
-      if (finding === undefined) {
-        throw new Error('Finding insert did not return the created row.')
-      }
-
-      raised.push({ id: finding.id, ruleCode: rule.ruleCode, title: rule.title })
-
-      await recordAuditEvent(tx, {
-        actor: { kind: 'user', userId: input.user.id, role: input.user.role },
-        action: AuditActions.findingRaised,
-        entityType: 'finding',
-        entityId: finding.id,
-        summary: `Rule ${rule.ruleCode} raised a finding: ${rule.title}.`,
-        changes: {
-          ruleCode: rule.ruleCode,
-          severity: rule.severity,
-          outcome: rule.outcome,
-          observedValue: rule.observedValue,
-          expectedValue: rule.expectedValue,
-        },
-        requestId: input.requestId ?? null,
+    const inserted = await tx
+      .insert(findings)
+      .values({
+        parcelId: input.evaluation.parcelId,
+        relatedParcelId: null,
+        extractionId: null,
+        kind: rule.findingKind ?? 'other',
+        severity: rule.severity,
+        status: 'open',
+        title: rule.title,
+        explanation: rule.explanation,
+        evidenceReference: rule.evidenceReference,
+        ruleCode: rule.ruleCode,
       })
-    }
-  })
+      .returning({ id: findings.id })
 
-  return {
+    const finding = inserted[0]
+    if (finding === undefined) {
+      throw new Error('Finding insert did not return the created row.')
+    }
+
+    raised.push({ id: finding.id, ruleCode: rule.ruleCode, title: rule.title })
+
+    await recordAuditEvent(tx, {
+      actor: { kind: 'user', userId: input.user.id, role: input.user.role },
+      action: AuditActions.findingRaised,
+      entityType: 'finding',
+      entityId: finding.id,
+      summary: `Rule ${rule.ruleCode} raised a finding: ${rule.title}.`,
+      changes: {
+        ruleCode: rule.ruleCode,
+        severity: rule.severity,
+        outcome: rule.outcome,
+        observedValue: rule.observedValue,
+        expectedValue: rule.expectedValue,
+      },
+      requestId: input.requestId ?? null,
+    })
+  }
+
+  return { raisedFindings: raised, existingOpenRules: skipped }
+}
+
+/** Runs the rules and, optionally, raises findings for what failed. */
+export async function reconcileParcel(
+  database: Database,
+  input: ReconcileInput,
+): Promise<ReconciliationResult> {
+  const evaluation = await evaluateParcelReconciliation(database, {
+    user: input.user,
     parcelId: input.parcelId,
     rulesVersion: input.rulesVersion,
-    rules,
-    summary: {
-      outcome: summary.outcome,
-      counts: { ...summary.counts },
-      summary: summary.summary,
-    },
-    raisedFindings: raised,
-    existingOpenRules: skipped,
+  })
+
+  if (!input.persist) {
+    return {
+      parcelId: evaluation.parcelId,
+      rulesVersion: evaluation.rulesVersion,
+      rules: evaluation.rules,
+      summary: evaluation.summary,
+      raisedFindings: [],
+      existingOpenRules: [],
+    }
+  }
+
+  const { raisedFindings, existingOpenRules } = await database.orm.transaction(
+    (tx) =>
+      persistReconciliationFindings(tx, {
+        user: input.user,
+        evaluation,
+        requestId: input.requestId ?? null,
+      }),
+  )
+
+  return {
+    parcelId: evaluation.parcelId,
+    rulesVersion: evaluation.rulesVersion,
+    rules: evaluation.rules,
+    summary: evaluation.summary,
+    raisedFindings,
+    existingOpenRules,
   }
 }

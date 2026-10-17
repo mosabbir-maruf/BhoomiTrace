@@ -14,13 +14,15 @@ import {
 import { NotFoundError, ProviderUnavailableError } from '../lib/errors.js'
 import { systemActor } from '../services/audit.js'
 import { persistExtractionResult } from '../services/extractions.js'
+import { finalizeClaimedJob, type ClaimedJob, type JobFence } from '../services/jobs.js'
 import {
-  assertJobLeaseHeld,
-  type ClaimedJob,
-  type JobFence,
-} from '../services/jobs.js'
-import { reconcileParcel } from '../services/reconciliation.js'
-import { generateReadinessReport } from '../services/readiness.js'
+  evaluateParcelReconciliation,
+  persistReconciliationFindings,
+} from '../services/reconciliation.js'
+import {
+  evaluateParcelReadiness,
+  persistReadinessReport,
+} from '../services/readiness.js'
 import { readStoredFile, StoredFileError } from '../services/storage.js'
 
 /**
@@ -36,9 +38,12 @@ import { readStoredFile, StoredFileError } from '../services/storage.js'
  *   tens of seconds; holding a database transaction open across it would pin a
  *   connection and block other work. The claim's lease — not a transaction — is
  *   what reserves the job, which is precisely why the lease exists.
- * - **Every write is fenced on the lease.** The ownership check is the first
- *   statement of the transaction that writes a result, so a worker that lost its
- *   lease mid-read rolls back instead of adding a second copy of the same work.
+ * - **Every write is fenced on the lease, and the job is finalized with it.** The
+ *   ownership-and-lease check, the domain writes, the terminal status, the result
+ *   payload, and the audit row all commit in one transaction
+ *   (`finalizeClaimedJob`). A worker that lost its lease writes nothing, a stale
+ *   worker cannot finalize a job another worker has reclaimed, and recovery
+ *   cannot requeue a job whose effects have already been committed.
  * - **Worker writes are attributed to the system.** An extraction produced by the
  *   worker is recorded as a system action naming the worker, not as an action by
  *   the person who requested it. Pretending a human performed an automated read
@@ -165,50 +170,57 @@ async function processDocumentExtraction(
   // takes thirty seconds does not hold a database connection while it works.
   const extraction = await context.provider.extract(request)
 
-  const stored = await context.database.orm.transaction(async (tx) => {
-    // The fence: if this worker no longer holds the job, nothing is written.
-    await assertJobLeaseHeld(tx, context.fence)
+  // The side effects, the terminal status, the result, the lease release, and
+  // the audit row commit together, fenced on the lease. A worker that lost its
+  // lease writes nothing; recovery cannot requeue the job once these effects are
+  // committed, because the job is no longer `processing`.
+  const outcome = await finalizeClaimedJob(
+    context.database,
+    context.fence,
+    async (tx) => {
+      const stored = await persistExtractionResult(tx, {
+        result: extraction,
+        parcelId,
+        sourceDocumentId: document.id,
+        actor: systemActor('extraction-worker'),
+      })
 
-    return persistExtractionResult(tx, {
-      result: extraction,
-      parcelId,
-      sourceDocumentId: document.id,
-      actor: systemActor('extraction-worker'),
-    })
-  })
+      const unclearCount = stored.filter((row) => row.isUnclear).length
 
-  const unclearCount = stored.filter((row) => row.isUnclear).length
+      return {
+        // Unreadable readings are a normal outcome that needs a person, not an
+        // error, so the job reports `review_required` rather than failing.
+        status: unclearCount > 0 ? 'review_required' : 'completed',
+        result: {
+          provider: extraction.provider,
+          model: extraction.model,
+          // Say plainly whether these readings came from the document or from a
+          // synthetic double, so a result is never mistaken for a real read.
+          readsDocumentContent: context.provider.readsDocumentContent,
+          hadStoredContent: content !== null,
+          extractionIds: stored.map((row) => row.id),
+          fieldCount: stored.length,
+          unclearCount,
+          warnings: extraction.warnings,
+          parcelId,
+          sourceDocumentId: document.id,
+        },
+      }
+    },
+  )
 
   context.log.info(
     {
       jobId: job.id,
       provider: extraction.provider,
       readsDocumentContent: context.provider.readsDocumentContent,
-      fieldCount: stored.length,
-      unclearCount,
+      fieldCount: outcome.result['fieldCount'],
+      unclearCount: outcome.result['unclearCount'],
     },
     'extraction job produced readings',
   )
 
-  return {
-    // Unreadable readings are a normal outcome that needs a person, not an
-    // error, so the job reports `review_required` rather than failing.
-    status: unclearCount > 0 ? 'review_required' : 'completed',
-    result: {
-      provider: extraction.provider,
-      model: extraction.model,
-      // Say plainly whether these readings came from the document or from a
-      // synthetic double, so a result is never mistaken for a real read.
-      readsDocumentContent: context.provider.readsDocumentContent,
-      hadStoredContent: content !== null,
-      extractionIds: stored.map((row) => row.id),
-      fieldCount: stored.length,
-      unclearCount,
-      warnings: extraction.warnings,
-      parcelId,
-      sourceDocumentId: document.id,
-    },
-  }
+  return outcome
 }
 
 /**
@@ -269,28 +281,35 @@ async function processParcelReconciliation(
 
   const user = await loadRequester(context.database, job)
 
-  const reconciliation = await reconcileParcel(context.database, {
+  // The rules are read-only, so they run outside the write transaction. The
+  // findings and the job's terminal state then commit together, under the lease.
+  const evaluation = await evaluateParcelReconciliation(context.database, {
     user,
     parcelId,
-    persist: true,
     rulesVersion: context.rulesVersion,
-    fence: context.fence,
   })
 
-  const blocking = reconciliation.rules.filter(
+  const blocking = evaluation.rules.filter(
     (rule) => rule.outcome === 'fail' && rule.severity === 'high',
   )
 
-  return {
-    status: blocking.length > 0 ? 'review_required' : 'completed',
-    result: {
-      outcome: reconciliation.summary.outcome,
-      counts: reconciliation.summary.counts,
-      raisedFindings: reconciliation.raisedFindings.length,
-      blockingHighSeverity: blocking.length,
-      parcelId,
-    },
-  }
+  return finalizeClaimedJob(context.database, context.fence, async (tx) => {
+    const { raisedFindings } = await persistReconciliationFindings(tx, {
+      user,
+      evaluation,
+    })
+
+    return {
+      status: blocking.length > 0 ? 'review_required' : 'completed',
+      result: {
+        outcome: evaluation.summary.outcome,
+        counts: evaluation.summary.counts,
+        raisedFindings: raisedFindings.length,
+        blockingHighSeverity: blocking.length,
+        parcelId,
+      },
+    }
+  })
 }
 
 async function processReadinessReport(
@@ -304,23 +323,29 @@ async function processReadinessReport(
 
   const user = await loadRequester(context.database, job)
 
-  const report = await generateReadinessReport(context.database, {
+  const evaluation = await evaluateParcelReadiness(context.database, {
     user,
     parcelId,
     rulesVersion: context.rulesVersion,
-    fence: context.fence,
   })
 
-  return {
-    status: report.outcome === 'not_ready' ? 'review_required' : 'completed',
-    result: {
-      readinessReportId: report.id,
-      outcome: report.outcome,
-      counts: report.counts,
-      itemCount: report.items.length,
-      parcelId,
-    },
-  }
+  return finalizeClaimedJob(context.database, context.fence, async (tx) => {
+    const reportId = await persistReadinessReport(tx, { user, evaluation })
+
+    return {
+      status:
+        evaluation.summary.outcome === 'not_ready'
+          ? 'review_required'
+          : 'completed',
+      result: {
+        readinessReportId: reportId,
+        outcome: evaluation.summary.outcome,
+        counts: evaluation.summary.counts,
+        itemCount: evaluation.rules.length,
+        parcelId,
+      },
+    }
+  })
 }
 
 /** Loads the account a job is attributed to. */

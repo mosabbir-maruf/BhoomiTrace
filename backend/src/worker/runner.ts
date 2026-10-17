@@ -4,9 +4,7 @@ import { JobLeaseLostError } from '../lib/errors.js'
 import { safeErrorSummary } from '../lib/redact.js'
 import {
   claimNextJob,
-  completeJob,
   failJobAttempt,
-  markJobReviewRequired,
   recoverExpiredLeases,
   renewJobLease,
   type ClaimedJob,
@@ -31,10 +29,19 @@ import {
  * expensive: too short and a second worker starts the same job while the first
  * is still reading; too long and a crashed worker's job is stalled. So the lease
  * is renewed while the job runs, at a fraction of its length, and *every write
- * the job makes is fenced on it*. If a renewal fails, or the guarded update
- * finds the job is no longer held, the worker stops: it logs, abandons the
- * result, and lets recovery handle the job. It never writes a result for a lease
- * it does not hold.
+ * the job makes is fenced on it*. If a renewal reports that the job is no longer
+ * held, the worker stops: it logs, abandons the result, and lets recovery handle
+ * the job. It never writes a result for a lease it does not hold.
+ *
+ * ## Where finalization happens
+ *
+ * The runner does not mark a job complete. The processor's `finalizeClaimedJob`
+ * commits the domain effects, the terminal status, the result, the lease
+ * release, and the audit row in one transaction; by the time it returns, the job
+ * is already settled. So on success there is nothing left for the runner to do
+ * but log. Only a *failure* — where the attempt ended without writing effects —
+ * needs a further database action, and `failJobAttempt` performs it atomically
+ * under the same lease guard.
  *
  * Shutdown is graceful. On `SIGINT`/`SIGTERM` the loop stops taking new work,
  * finishes the job it is already running, and then exits.
@@ -202,34 +209,10 @@ export class ExtractionWorker {
     )
 
     try {
+      // The processor commits the effects, the terminal status, the result, the
+      // lease release, and the audit row atomically, so a resolved promise means
+      // the job is already settled and there is nothing left to write.
       const outcome = await processClaimedJob(context, job)
-
-      if (this.leaseLost) {
-        // The work itself may have completed, but this worker is no longer
-        // entitled to record it. Whatever the processor tried to write was
-        // rolled back by the fence; the job is left for recovery.
-        this.options.log.warn(
-          { jobId: job.id, workerId: this.options.workerId },
-          'job lease was lost while working; the result was not recorded',
-        )
-        return
-      }
-
-      if (outcome.status === 'review_required') {
-        await markJobReviewRequired(
-          this.options.database,
-          job.id,
-          this.options.workerId,
-          outcome.result,
-        )
-      } else {
-        await completeJob(
-          this.options.database,
-          job.id,
-          this.options.workerId,
-          outcome.result,
-        )
-      }
 
       this.options.log.info(
         {
@@ -255,24 +238,41 @@ export class ExtractionWorker {
         return
       }
 
-      const failure = await failJobAttempt(this.options.database, {
-        jobId: job.id,
-        workerId: this.options.workerId,
-        error,
-        backoffSeconds: this.options.retryBackoffSeconds,
-      })
-
-      this.options.log.warn(
-        {
+      try {
+        const failure = await failJobAttempt(this.options.database, {
           jobId: job.id,
-          status: failure.status,
-          attempt: failure.attemptCount,
-          maxAttempts: failure.maxAttempts,
-          durationMs: Date.now() - startedAt,
           workerId: this.options.workerId,
-        },
-        'job attempt failed',
-      )
+          error,
+          backoffSeconds: this.options.retryBackoffSeconds,
+        })
+
+        this.options.log.warn(
+          {
+            jobId: job.id,
+            status: failure.status,
+            attempt: failure.attemptCount,
+            maxAttempts: failure.maxAttempts,
+            durationMs: Date.now() - startedAt,
+            workerId: this.options.workerId,
+          },
+          'job attempt failed',
+        )
+      } catch (failureError) {
+        // The lease was already gone when the failure was recorded, so nothing
+        // was written. Recovery owns the job; treat the attempt as abandoned.
+        if (failureError instanceof JobLeaseLostError) {
+          this.options.log.warn(
+            {
+              jobId: job.id,
+              workerId: this.options.workerId,
+              reason: safeErrorSummary(failureError),
+            },
+            'job lease lost while recording the failure; recovery owns it',
+          )
+          return
+        }
+        throw failureError
+      }
     } finally {
       await heartbeat.stop()
       this.inFlight = false
@@ -310,19 +310,27 @@ export class ExtractionWorker {
 
   private async renewLease(fence: JobFence): Promise<void> {
     try {
-      const held = await renewJobLease(this.options.database, {
+      const renewal = await renewJobLease(this.options.database, {
         jobId: fence.jobId,
         workerId: fence.workerId,
         leaseSeconds: this.options.leaseSeconds,
       })
 
-      if (!held) {
-        this.leaseLost = true
-        this.options.log.error(
-          { jobId: fence.jobId, workerId: fence.workerId },
-          'job lease was lost; this worker will not record a result',
-        )
+      if (renewal === 'renewed') return
+
+      if (renewal === 'settled') {
+        // The job already reached a terminal state — this worker finished it, or
+        // recovery moved it on. There is nothing to renew and nothing to warn
+        // about: the finalization fence is the authority on whether a write is
+        // still permitted.
+        return
       }
+
+      this.leaseLost = true
+      this.options.log.error(
+        { jobId: fence.jobId, workerId: fence.workerId },
+        'job lease was lost; this worker will not record a result',
+      )
     } catch (error) {
       // A renewal that cannot be confirmed is treated as a lost lease.
       // Continuing would risk two workers writing the same job's results, which

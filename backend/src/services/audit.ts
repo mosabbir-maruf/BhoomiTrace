@@ -120,6 +120,8 @@ export const AuditActions = {
   jobCompleted: 'job.completed',
   jobFailed: 'job.failed',
   jobReviewRequired: 'job.review_required',
+  jobRetryScheduled: 'job.retry_scheduled',
+  jobLeaseRecovered: 'job.lease_recovered',
   jobCancelled: 'job.cancelled',
 } as const
 

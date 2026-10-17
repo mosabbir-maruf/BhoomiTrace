@@ -20,9 +20,9 @@ import {
   evaluateReconciliation,
   loadReconciliationContext,
   summariseOutcomes,
+  type RuleResult,
 } from '../validation/rules.js'
 import { AuditActions, recordAuditEvent } from './audit.js'
-import { assertJobLeaseHeld, type JobFence } from './jobs.js'
 import { loadVisibleParcel } from './parcels.js'
 
 /**
@@ -91,11 +91,132 @@ export interface GenerateReadinessInput {
   parcelId: string
   rulesVersion: string
   requestId?: string | null
-  /**
-   * When present, the write is fenced on this worker's job lease, so a worker
-   * that lost its job cannot persist a report.
-   */
-  fence?: JobFence
+}
+
+/**
+ * The read-only half of a readiness report: run the rules.
+ *
+ * Nothing is written here, so it can run before the write transaction. A report
+ * is a point-in-time snapshot, so evaluating outside the transaction is correct
+ * rather than merely convenient — the report records the picture at the moment
+ * it was generated — and it lets a worker evaluate without a transaction and
+ * then persist the report and finalize the job atomically.
+ */
+export interface ReadinessEvaluation {
+  parcelId: string
+  rulesVersion: string
+  rules: RuleResult[]
+  summary: {
+    outcome: ReadinessOutcome
+    counts: Record<string, number>
+    summary: string
+  }
+}
+
+/** The executor surface the report write needs. */
+export type ReadinessWriter = Pick<Database['orm'], 'select' | 'insert'>
+
+/**
+ * Evaluates the rule set for a parcel the caller can see, writing nothing.
+ *
+ * Visibility is checked first, so a report can never become an oracle for a
+ * record the caller is not allowed to read.
+ */
+export async function evaluateParcelReadiness(
+  database: Database,
+  input: { user: User; parcelId: string; rulesVersion: string },
+): Promise<ReadinessEvaluation> {
+  await loadVisibleParcel(database, input.user, input.parcelId)
+
+  const context = await loadReconciliationContext(database, input.parcelId)
+  if (context === null) {
+    throw new NotFoundError('No parcel exists with that identifier.')
+  }
+
+  const rules = await evaluateReconciliation(database, context)
+  const summary = summariseOutcomes(rules)
+
+  return {
+    parcelId: input.parcelId,
+    rulesVersion: input.rulesVersion,
+    rules,
+    summary: {
+      outcome: summary.outcome,
+      counts: { ...summary.counts },
+      summary: summary.summary,
+    },
+  }
+}
+
+/**
+ * Stores an evaluated report and its checklist, inside the caller's transaction.
+ *
+ * The report, its checklist items, and the audit row are written together, so
+ * the insert and the record of it cannot diverge. Reports are append-only in
+ * practice: generating again inserts a new report and leaves the previous one
+ * intact.
+ */
+export async function persistReadinessReport(
+  tx: ReadinessWriter,
+  input: {
+    user: User
+    evaluation: ReadinessEvaluation
+    requestId?: string | null
+  },
+): Promise<string> {
+  const { evaluation, user } = input
+
+  const inserted = await tx
+    .insert(readinessReports)
+    .values({
+      parcelId: evaluation.parcelId,
+      requestedBy: user.id,
+      outcome: evaluation.summary.outcome,
+      rulesVersion: evaluation.rulesVersion,
+      summary: evaluation.summary.summary,
+      counts: { ...evaluation.summary.counts },
+    })
+    .returning({ id: readinessReports.id })
+
+  const report = inserted[0]
+  if (report === undefined) {
+    throw new Error('Readiness report insert did not return the created row.')
+  }
+
+  if (evaluation.rules.length > 0) {
+    await tx.insert(readinessChecklistItems).values(
+      evaluation.rules.map((rule, index) => ({
+        reportId: report.id,
+        ruleCode: rule.ruleCode,
+        outcome: rule.outcome,
+        severity: rule.severity,
+        title: rule.title,
+        explanation: rule.explanation,
+        observedValue: rule.observedValue,
+        expectedValue: rule.expectedValue,
+        evidenceReference: rule.evidenceReference,
+        recordReferences: rule.recordReferences,
+        sortOrder: index,
+      })),
+    )
+  }
+
+  await recordAuditEvent(tx, {
+    actor: { kind: 'user', userId: user.id, role: user.role },
+    action: AuditActions.readinessReportGenerated,
+    entityType: 'readiness_report',
+    entityId: report.id,
+    summary: `Readiness report generated: ${evaluation.summary.outcome}.`,
+    changes: {
+      parcelId: evaluation.parcelId,
+      rulesVersion: evaluation.rulesVersion,
+      counts: evaluation.summary.counts,
+      checklistItems: evaluation.rules.length,
+    },
+    requestId: input.requestId ?? null,
+  })
+
+  return report.id
 }
 
 /**
@@ -108,74 +229,19 @@ export async function generateReadinessReport(
   database: Database,
   input: GenerateReadinessInput,
 ): Promise<ReadinessReportView> {
-  await loadVisibleParcel(database, input.user, input.parcelId)
-
-  const context = await loadReconciliationContext(database, input.parcelId)
-  if (context === null) {
-    throw new NotFoundError('No parcel exists with that identifier.')
-  }
-
-  const rules = await evaluateReconciliation(database, context)
-  const summary = summariseOutcomes(rules)
-
-  const reportId = await database.orm.transaction(async (tx) => {
-    // The fence, when a worker is driving this.
-    if (input.fence !== undefined) {
-      await assertJobLeaseHeld(tx, input.fence)
-    }
-
-    const inserted = await tx
-      .insert(readinessReports)
-      .values({
-        parcelId: input.parcelId,
-        requestedBy: input.user.id,
-        outcome: summary.outcome,
-        rulesVersion: input.rulesVersion,
-        summary: summary.summary,
-        counts: { ...summary.counts },
-      })
-      .returning({ id: readinessReports.id })
-
-    const report = inserted[0]
-    if (report === undefined) {
-      throw new Error('Readiness report insert did not return the created row.')
-    }
-
-    if (rules.length > 0) {
-      await tx.insert(readinessChecklistItems).values(
-        rules.map((rule, index) => ({
-          reportId: report.id,
-          ruleCode: rule.ruleCode,
-          outcome: rule.outcome,
-          severity: rule.severity,
-          title: rule.title,
-          explanation: rule.explanation,
-          observedValue: rule.observedValue,
-          expectedValue: rule.expectedValue,
-          evidenceReference: rule.evidenceReference,
-          recordReferences: rule.recordReferences,
-          sortOrder: index,
-        })),
-      )
-    }
-
-    await recordAuditEvent(tx, {
-      actor: { kind: 'user', userId: input.user.id, role: input.user.role },
-      action: AuditActions.readinessReportGenerated,
-      entityType: 'readiness_report',
-      entityId: report.id,
-      summary: `Readiness report generated: ${summary.outcome}.`,
-      changes: {
-        parcelId: input.parcelId,
-        rulesVersion: input.rulesVersion,
-        counts: summary.counts,
-        checklistItems: rules.length,
-      },
-      requestId: input.requestId ?? null,
-    })
-
-    return report.id
+  const evaluation = await evaluateParcelReadiness(database, {
+    user: input.user,
+    parcelId: input.parcelId,
+    rulesVersion: input.rulesVersion,
   })
+
+  const reportId = await database.orm.transaction((tx) =>
+    persistReadinessReport(tx, {
+      user: input.user,
+      evaluation,
+      requestId: input.requestId ?? null,
+    }),
+  )
 
   return loadReadinessReport(database, input.user, reportId)
 }
