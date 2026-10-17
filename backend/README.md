@@ -389,19 +389,36 @@ the result.
 
 - **Leases, not locks.** A claim is a **renewed** lease. A running job extends its
   lease as it works (`renewJobLease`, guarded on the job id **and** the worker id
-  **and** the `processing` state, so a stale or foreign worker cannot keep a job
-  alive), which means a slow job is not stolen from a healthy worker merely
+  **and** the `processing` state **and** a lease that has not already expired, so
+  a stale or foreign worker can neither keep a job alive nor resurrect a lease it
+  already lost), which means a slow job is not stolen from a healthy worker merely
   because it is slow. If a worker dies mid-job, it stops renewing, the lease
-  expires, and the job is recovered and retried rather than stranded.
-- **Side effects are fenced.** Every write a worker makes happens in a transaction
-  whose first statement re-checks that this worker still holds the job
-  (`assertJobLeaseHeld`, under `FOR UPDATE`). A worker whose lease was taken away
-  while it was reading writes **nothing** — the whole transaction rolls back and
-  the attempt ends `job_lease_lost` — so two workers can never leave two competing
-  sets of readings for one job.
+  expires, and `recoverExpiredLeases` returns the job to the queue — or fails it
+  once its attempts are exhausted — recording one `job.lease_recovered` event per
+  job in the same transaction.
+- **Side effects, finalization, and audit are one transaction.** A worker's
+  domain writes, its terminal status, the result payload, the lease release, and
+  the terminal audit row all commit together (`finalizeClaimedJob`). The
+  transaction takes the job row's `FOR UPDATE` lock and re-checks the live lease
+  first (`assertJobLeaseHeld`), so a worker whose lease was taken away writes
+  **nothing** — the whole thing rolls back and the attempt ends `job_lease_lost`.
+  Because the lock is held until commit, a recovery racing the finalization blocks
+  and then sees the committed row, which is no longer `processing`; it therefore
+  cannot requeue a job whose effects are already committed. This closes the window
+  in which effects were committed and a recovery could duplicate them, and it
+  means a job never reaches a terminal state without the event that explains it —
+  an audit-write failure rolls the transition back with it.
+- **Wall clock for lease deadlines, transaction clock for queue eligibility.**
+  Lease validity (`leased_until`) is compared against `clock_timestamp()`, because
+  a lease is a promise about real time and `now()` (`transaction_timestamp()`) is
+  frozen at transaction start and would not move during a long write transaction.
+  The single-statement, autocommit claim keeps `now()` for `available_at <= now()`,
+  where the two coincide.
 - **A bounded number of attempts.** A job that keeps failing is retried with a
-  doubling delay up to `WORKER_MAX_ATTEMPTS`, then marked failed with a reason —
-  a sanitised one, never a stack trace.
+  doubling delay up to the job's `max_attempts`, then marked failed with a reason —
+  a sanitised one, never a stack trace. Each transition (`job.retry_scheduled`,
+  `job.failed`) is written with the status change in one transaction, under the
+  job row's lock.
 - **Idempotent enqueue, scoped to the requester.** An `idempotencyKey` is a
   client's own label, so it is unique **per requester**, not globally: two
   accounts may use the same key and each gets their own job, and neither is ever
