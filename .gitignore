@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# BhoomiTrace — repository-wide ignore rules
+# ---------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+
+# Node / TypeScript
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment files — never commit real values. Keep the *.example templates.
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Logs, caches, temporary files
+*.log
+logs/
+.cache/
+.tmp-*
+*.pid
+
+# Local database data (Docker named volumes live outside the repo; this guards
+# bind-mounted directories if one is ever added).
+.docker-data/
+pgdata/
+
+# ---------------------------------------------------------------------------
+# Existing Figma Make frontend scaffold
+# ---------------------------------------------------------------------------
+# `frontend/` is a pre-existing Figma Make export that is NOT part of version
+# control. It is tracked separately when the frontend track begins. It must
+# never be committed from a backend branch, so it is ignored here.
+/frontend/
+
+# ---------------------------------------------------------------------------
+# Agent / IDE metadata — never committed
+# ---------------------------------------------------------------------------
+.agent/
+.claude/
+.claude-replay.*
+.cursor/
+.gemini/
+.impeccable/
+.opencode-skills/
+.plugins/
+/.figma/design-context/

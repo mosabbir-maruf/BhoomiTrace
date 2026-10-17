@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# BhoomiTrace — local development services
+#
+# Phase 1 provides the PostgreSQL instance required by the backend. Later
+# phases extend this file (application containers, etc.); keep additions
+# additive and documented.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose ps
+#   docker compose down          # keeps the named volume (data preserved)
+#   docker compose down -v       # DESTROYS local database data
+# ---------------------------------------------------------------------------
+
+name: bhoomitrace
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: bhoomitrace-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bhoomitrace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bhoomitrace}
+      POSTGRES_DB: ${POSTGRES_DB:-bhoomitrace}
+      POSTGRES_TEST_DB: ${POSTGRES_TEST_DB:-bhoomitrace_test}
+      # Deterministic collation for the synthetic demo data.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale-provider=icu --icu-locale=und"
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Creates the integration-test database on first initialisation.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  postgres-data:
+    name: bhoomitrace-postgres-data
