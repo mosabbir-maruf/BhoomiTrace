@@ -24,8 +24,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bhoomitrace}
       POSTGRES_DB: ${POSTGRES_DB:-bhoomitrace}
       POSTGRES_TEST_DB: ${POSTGRES_TEST_DB:-bhoomitrace_test}
-      # Deterministic collation for the synthetic demo data.
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale-provider=icu --icu-locale=und"
     ports:
       - "${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:

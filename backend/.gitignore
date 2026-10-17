@@ -1,0 +1,10 @@
+# Build output and local environment live in the repository-level .gitignore.
+# This file exists so the backend can also be extracted as a standalone package.
+
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
