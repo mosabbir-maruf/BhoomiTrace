@@ -8,9 +8,13 @@ on:
         required: false
         default: 'bhoomitrace-backend'
       keep_count:
-        description: 'Recent versions to keep (immutable tags are always kept)'
+        description: 'Newest versions to keep overall (policy: 2)'
         required: false
         default: '2'
+      sha_keep_count:
+        description: 'Newest SHA-tagged versions to keep (policy: 10)'
+        required: false
+        default: '10'
       delete:
         description: 'Delete candidates (false = dry-run report only)'
         required: false
@@ -30,6 +34,7 @@ jobs:
     env:
       MODE: ${{ inputs.delete == 'true' && 'delete' || 'report' }}
       KEEP_COUNT: ${{ inputs.keep_count }}
+      SHA_KEEP_COUNT: ${{ inputs.sha_keep_count }}
       OWNER: ${{ github.repository_owner }}
       PACKAGE: ${{ inputs.package_name }}
       TOKEN: ${{ secrets.GITHUB_TOKEN }}

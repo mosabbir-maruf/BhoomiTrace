@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 # GHCR retention helper.
 #
-# MODE=report  (default): list versions and mark keep/delete candidates. Never deletes.
-# MODE=delete:            delete candidates, keeping the newest KEEP_COUNT versions
-#                         plus every version carrying an immutable sha-* or semver tag.
+# Policy (explicit, bounded):
+#   - Always preserve every version carrying a valid semver release tag.
+#   - Preserve the newest 10 (SHA_KEEP_COUNT) SHA-build versions.
+#   - Preserve the newest 2 (KEEP_COUNT) versions overall.
+#   - Delete only versions outside those keep sets.
+#   - Never delete a version carrying a semver release tag.
+#   - A version may carry multiple tags and is evaluated as one package version.
 #
-# Safety guards:
+# MODE=report  (default): list versions and mark keep/delete candidates. Never deletes.
+# MODE=delete:            delete candidates with safety guards.
+#
+# Safety guards (fail closed):
+#   - KEEP_COUNT and SHA_KEEP_COUNT must be positive integers.
+#   - API errors, malformed responses, or uncertain keep-set computation abort
+#     with zero deletions.
 #   - never deletes when total versions <= KEEP_COUNT
 #   - never deletes a version in the keep set
 #   - aborts if a deletion would leave fewer than KEEP_COUNT versions
@@ -86,6 +96,13 @@ if [ "$_from_file" = "0" ]; then
     page=$((page + 1))
   done
 
+  if [ ! -s "$tmpdir/versions.jsonl" ]; then
+    echo "No versions found for ghcr.io/$owner_lc/$PACKAGE (package may not exist yet)."
+    exit 0
+  fi
+
+  # Combine paginated JSONL records into a single JSON array before any keep-set calc.
+  jq -s '.' "$tmpdir/versions.jsonl" > "$tmpdir/versions.json"
 fi
 
 # No versions found (file mode with empty array).
