@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 
 import { auditRoutes } from './audit.js'
+import { applicationRoutes } from './applications.js'
 import { authRoutes } from './auth.js'
 import { documentRoutes } from './documents.js'
 import { jobRoutes } from './jobs.js'
@@ -20,6 +21,7 @@ import { reviewRoutes } from './review.js'
 export function registerApiRoutes(app: FastifyInstance): void {
   authRoutes(app)
   parcelRoutes(app)
+  applicationRoutes(app)
   lineageRoutes(app)
   documentRoutes(app)
   reviewRoutes(app)
