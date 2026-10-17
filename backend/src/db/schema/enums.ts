@@ -148,3 +148,47 @@ export const checklistOutcomeEnum = pgEnum('checklist_outcome', [
   'needs_review',
   'not_applicable',
 ])
+
+/**
+ * Lifecycle of a parcel record.
+ *
+ * `retired` is the non-destructive alternative to deletion. A parcel is never
+ * hard-deleted: it is withdrawn from active use while its evidence, lineage,
+ * findings, and reviews stay readable. There is no delete endpoint anywhere in
+ * the API, which is why this exists.
+ */
+export const parcelLifecycleEnum = pgEnum('parcel_lifecycle', [
+  'active',
+  'retired',
+])
+
+/**
+ * TypeScript aliases for the enumerated sets.
+ *
+ * These are derived from the `pgEnum` definitions above rather than written out
+ * again, so a migration that adds a member widens the TypeScript type at the same
+ * moment. Everywhere else in the codebase refers to `ExtractionField` or
+ * `UserRole` rather than repeating a string union, which is what keeps the
+ * service layer and the database from drifting apart.
+ */
+export type UserRole = (typeof userRoleEnum.enumValues)[number]
+export type UserStatus = (typeof userStatusEnum.enumValues)[number]
+export type SurveyVersion = (typeof surveyVersionEnum.enumValues)[number]
+export type LineageRelation = (typeof lineageRelationEnum.enumValues)[number]
+export type LineageCertainty = (typeof lineageCertaintyEnum.enumValues)[number]
+export type SourceDocumentKind = (typeof sourceDocumentKindEnum.enumValues)[number]
+export type DocumentStatus = (typeof documentStatusEnum.enumValues)[number]
+export type ExtractionField = (typeof extractionFieldEnum.enumValues)[number]
+export type ExtractionReviewStatus =
+  (typeof extractionReviewStatusEnum.enumValues)[number]
+export type FindingKind = (typeof findingKindEnum.enumValues)[number]
+export type FindingSeverity = (typeof findingSeverityEnum.enumValues)[number]
+export type FindingStatus = (typeof findingStatusEnum.enumValues)[number]
+export type ReviewOutcome = (typeof reviewOutcomeEnum.enumValues)[number]
+export type DataOrigin = (typeof dataOriginEnum.enumValues)[number]
+export type ProcessingJobKind = (typeof processingJobKindEnum.enumValues)[number]
+export type ProcessingJobStatus =
+  (typeof processingJobStatusEnum.enumValues)[number]
+export type ReadinessOutcome = (typeof readinessOutcomeEnum.enumValues)[number]
+export type ChecklistOutcome = (typeof checklistOutcomeEnum.enumValues)[number]
+export type ParcelLifecycle = (typeof parcelLifecycleEnum.enumValues)[number]

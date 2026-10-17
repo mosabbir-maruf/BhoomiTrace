@@ -11,7 +11,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core'
 
-import { dataOriginEnum, surveyVersionEnum } from './enums.js'
+import { dataOriginEnum, parcelLifecycleEnum, surveyVersionEnum } from './enums.js'
 import { users } from './users.js'
 
 /**
@@ -51,6 +51,17 @@ export const parcels = pgTable(
     areaDecimal: numeric('area_decimal', { precision: 14, scale: 4 }).notNull(),
     shareNumerator: integer('share_numerator').notNull().default(1),
     shareDenominator: integer('share_denominator').notNull().default(1),
+    /**
+     * `retired` withdraws a parcel from active use. There is no delete: a
+     * retired parcel keeps its evidence, lineage, findings, and reviews, so the
+     * record of what was examined is never lost.
+     */
+    lifecycle: parcelLifecycleEnum('lifecycle').notNull().default('active'),
+    retirementReason: text('retirement_reason'),
+    retiredAt: timestamp('retired_at', { withTimezone: true }),
+    retiredBy: uuid('retired_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
     version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -75,6 +86,7 @@ export const parcels = pgTable(
       table.mouza,
     ),
     index('parcels_owner_idx').on(table.ownerId),
+    index('parcels_lifecycle_idx').on(table.lifecycle),
     check(
       'parcels_area_non_negative',
       sql`${table.areaDecimal} >= 0`,

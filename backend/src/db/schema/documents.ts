@@ -53,6 +53,8 @@ export const sourceDocuments = pgTable(
     originalFilename: text('original_filename'),
     contentType: text('content_type'),
     byteSize: integer('byte_size'),
+    /** Optimistic-concurrency token, incremented by a database trigger. */
+    version: integer('version').notNull().default(1),
     createdBy: uuid('created_by').references(() => users.id, {
       onDelete: 'set null',
     }),
@@ -78,6 +80,7 @@ export const sourceDocuments = pgTable(
       'source_documents_byte_size_non_negative',
       sql`${table.byteSize} is null or ${table.byteSize} >= 0`,
     ),
+    check('source_documents_version_positive', sql`${table.version} >= 1`),
   ],
 )
 

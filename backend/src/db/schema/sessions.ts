@@ -1,4 +1,4 @@
-import { index, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { index, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 
 import { users } from './users.js'
 
@@ -42,7 +42,10 @@ export const authSessions = pgTable(
       .defaultNow(),
   },
   (table) => [
-    index('auth_sessions_token_hash_unique').on(table.tokenHash),
+    // Unique, not merely indexed: the token hash is the lookup key for
+    // authentication, so two rows sharing one would make "which session is
+    // this?" ambiguous. The index name says what it does.
+    uniqueIndex('auth_sessions_token_hash_unique').on(table.tokenHash),
     index('auth_sessions_user_idx').on(table.userId),
     // Supports the expiry sweeper.
     index('auth_sessions_expires_at_idx').on(table.expiresAt),
