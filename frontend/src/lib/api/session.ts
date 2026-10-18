@@ -27,7 +27,7 @@ function loadCachedUser(): Session | null {
 
 let session: Session | null =
   typeof window === "undefined" ? null : loadCachedUser()
-let isRestoring = false
+let restoring: Promise<Session | null> | null = null
 
 function emit() {
   listeners.forEach((l) => l())
@@ -66,27 +66,38 @@ export function sessionFromUser(user: PublicUser, isDemo = false): Session {
  * Restores the server-side session by querying GET /api/v1/auth/me.
  * If active, updates the session state and returns the session.
  * If expired or unauthorized, clears the session.
+ *
+ * Concurrent callers share one in-flight request. React StrictMode mounts the
+ * effect that calls this twice, and a browser tab opened with only the session
+ * cookie (empty sessionStorage) reaches here with no cached user: without
+ * sharing, the second call would report the not-yet-loaded `null` session while
+ * the first request was still in flight, and the route guard would bounce the
+ * user to the login page despite a valid session.
  */
 export async function restoreSession(): Promise<Session | null> {
-  if (isRestoring) return session
-  isRestoring = true
-  try {
-    const user = await apiGet<PublicUser>("/api/v1/auth/me")
-    const restored = sessionFromUser(user, false)
-    setSession(restored)
-    return restored
-  } catch {
-    // If not authenticated on backend:
-    // If current session was explicitly a local demo session, keep it, otherwise clear it
-    if (session?.isDemo) {
-      return session
+  if (restoring) return restoring
+
+  restoring = (async () => {
+    try {
+      const user = await apiGet<PublicUser>("/api/v1/auth/me")
+      const restored = sessionFromUser(user, false)
+      setSession(restored)
+      return restored
+    } catch {
+      // If not authenticated on backend:
+      // If current session was explicitly a local demo session, keep it, otherwise clear it
+      if (session?.isDemo) {
+        return session
+      }
+      setSession(null)
+      setCsrfToken(null)
+      return null
+    } finally {
+      restoring = null
     }
-    setSession(null)
-    setCsrfToken(null)
-    return null
-  } finally {
-    isRestoring = false
-  }
+  })()
+
+  return restoring
 }
 
 /** Explicitly starts an isolated client-side demo persona. */

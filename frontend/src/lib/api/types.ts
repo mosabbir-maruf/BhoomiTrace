@@ -452,6 +452,17 @@ export interface ApplicationDetail extends ApplicationSummary {
   today: string
   timeline: TimelineEvent[]
   decisionNote: string | null
+  /**
+   * Checklist codes declared at submission (`deed`, `id`, `khatian`, `tax`,
+   * `heir`). This is the authoritative per-application document list the API
+   * returns today.
+   */
+  declaredDocuments: string[]
+  /**
+   * Documents whose stored file is known to belong to this application. The
+   * current API does not link documents to applications, so this is empty in
+   * live mode and only populated by the demo fixtures.
+   */
   documents: DocumentItem[]
   parcel: Parcel | null
 }

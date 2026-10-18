@@ -1,10 +1,19 @@
-import { useId, useState } from "react"
+import { useId, useRef, useState } from "react"
 import type { DocumentItem, DocumentStatus } from "@/lib/api/types"
 import { applicationTypeLabel, documentStatusMeta } from "@/lib/domain"
+import {
+  ALLOWED_UPLOAD_ACCEPT,
+  UPLOAD_MAX_LABEL,
+  describeUploadError,
+  uploadDocument,
+  validateUploadFile,
+} from "@/lib/api/documents"
+import { isCurrentSessionLive } from "@/lib/api/session"
+import { toDocumentItem } from "@/lib/api/dashboard"
 import { formatDate, formatNumber, toBengaliDigits } from "@/lib/format"
 import { routeHref } from "@/config/navigation"
 import Button from "@/components/ui/Button"
-import { SelectField } from "@/components/ui/Field"
+import { SelectField, TextField } from "@/components/ui/Field"
 import { Page, Panel, Section } from "@/components/ui/Layout"
 import { EmptyState, Notice } from "@/components/ui/States"
 import StatusBadge from "@/components/ui/StatusBadge"
@@ -18,70 +27,206 @@ const filterOptions = [
   })),
 ]
 
-const MAX_BYTES = 10 * 1024 * 1024
-const ALLOWED = ["application/pdf", "image/jpeg", "image/png"]
+/** "report.pdf" → "report" — a starting title the applicant can edit. */
+function titleFromFilename(name: string): string {
+  return name.replace(/\.[^.]+$/, "").slice(0, 300)
+}
 
-/** Picks a file for display only. The file never leaves this browser tab and is not read or processed. */
-function LocalPicker() {
+function formatKilobytes(bytes: number): string {
+  return `${formatNumber(Math.max(1, Math.round(bytes / 1024)))} কেবি`
+}
+
+/**
+ * Real, authenticated document upload.
+ *
+ * The file is posted to `POST /api/v1/documents/upload` with the session cookie
+ * and CSRF header attached by the API client, so the same protections that guard
+ * every other write apply here. Progress is reported from the upload stream; a
+ * failure is described with the server's own reason rather than a generic error.
+ */
+function UploadPanel({
+  onUploaded,
+}: {
+  onUploaded: (doc: DocumentItem) => void
+}) {
   const inputId = useId()
-  const [file, setFile] = useState<{ name: string; size: number } | null>(null)
-  const [error, setError] = useState("")
+  const [file, setFile] = useState<File | null>(null)
+  const [title, setTitle] = useState("")
+  const [fileError, setFileError] = useState("")
+  const [titleError, setTitleError] = useState("")
+  const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState<number | null>(null)
+  const [failure, setFailure] = useState("")
+  const [success, setSuccess] = useState("")
+  const abortRef = useRef<AbortController | null>(null)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  const live = isCurrentSessionLive()
+
+  if (!live) {
+    return (
+      <Panel className="space-y-3 p-5">
+        <h2 className="text-lg font-semibold">নথি আপলোড</h2>
+        <Notice tone="info" title="ডেমো মোডে আপলোড বন্ধ">
+          আপলোড করা ফাইল সার্ভারে সংরক্ষিত হয়, তাই এটি করতে সাইন ইন করে প্রকৃত
+          অ্যাকাউন্টে ঢুকতে হবে। ডেমো মোডে কোনো ফাইল কোথাও পাঠানো হয় না।
+        </Notice>
+      </Panel>
+    )
+  }
+
+  const pick = (chosen: File | null) => {
+    setFileError("")
+    setFailure("")
+    setSuccess("")
+    setProgress(null)
+    if (!chosen) {
+      setFile(null)
+      return
+    }
+    const check = validateUploadFile(chosen)
+    if (!check.ok) {
+      setFile(null)
+      setFileError(check.message)
+      if (inputRef.current) inputRef.current.value = ""
+      return
+    }
+    setFile(chosen)
+    if (!title.trim()) setTitle(titleFromFilename(chosen.name))
+  }
+
+  const submit = async () => {
+    setFailure("")
+    setSuccess("")
+    let valid = true
+    if (!file) {
+      setFileError("একটি ফাইল বেছে নিন।")
+      valid = false
+    }
+    if (!title.trim()) {
+      setTitleError("নথির একটি শিরোনাম দিন।")
+      valid = false
+    }
+    if (!valid || !file) return
+
+    const controller = new AbortController()
+    abortRef.current = controller
+    setUploading(true)
+    setProgress(0)
+    try {
+      const document = await uploadDocument(
+        { file, title: title.trim() },
+        {
+          signal: controller.signal,
+          onProgress: (p) =>
+            setProgress(
+              p.total ? Math.round((p.loaded / p.total) * 100) : null,
+            ),
+        },
+      )
+      setSuccess(`“${document.title}” আপলোড হয়েছে।`)
+      setFile(null)
+      setTitle("")
+      setTitleError("")
+      onUploaded(toDocumentItem(document))
+      if (inputRef.current) inputRef.current.value = ""
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return
+      setFailure(describeUploadError(error))
+    } finally {
+      setUploading(false)
+      setProgress(null)
+      abortRef.current = null
+    }
+  }
+
   return (
-    <Panel className="space-y-3 p-5">
-      <h2 className="text-lg font-semibold">নমুনা ফাইল বেছে দেখুন</h2>
-      <p className="text-ink-muted">
-        ফাইল কোনো সার্ভারে পাঠানো হয় না, কোনো সরকারি রেকর্ডে যুক্ত হয় না, আর এতে কোনো লেখা পড়া
-        (ওসিআর) হয় না। পাতা বদলালে মুছে যায়।
-      </p>
+    <Panel className="space-y-4 p-5">
       <div>
-        <label htmlFor={inputId} className="mb-1.5 block text-sm font-medium">
-          ফাইল (পিডিএফ, জেপিজি বা পিএনজি, ১০ এমবি পর্যন্ত)
-        </label>
-        <input
-          id={inputId}
-          type="file"
-          accept=".pdf,.jpg,.jpeg,.png"
-          aria-describedby={error ? `${inputId}-error` : undefined}
-          aria-invalid={error ? true : undefined}
-          className="block w-full text-base file:mr-3 file:min-h-11 file:cursor-pointer file:rounded-sm file:border file:border-rule-strong file:bg-surface file:px-4 file:text-base file:text-ink hover:file:bg-sunken"
+        <h2 className="text-lg font-semibold">নথি আপলোড</h2>
+        <p className="text-ink-muted">
+          পিডিএফ, জেপিজি বা পিএনজি ফাইল (সর্বোচ্চ {UPLOAD_MAX_LABEL}) আপনার
+          অ্যাকাউন্টে সংরক্ষণ করুন। ফাইলটি ব্যক্তিগত স্টোরেজে রাখা হয় এবং শুধু
+          আপনার ও পর্যালোচকেরা দেখতে পারেন।
+        </p>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label htmlFor={inputId} className="mb-1.5 block text-sm font-medium">
+            ফাইল
+          </label>
+          <input
+            ref={inputRef}
+            id={inputId}
+            type="file"
+            accept={ALLOWED_UPLOAD_ACCEPT}
+            disabled={uploading}
+            aria-describedby={fileError ? `${inputId}-error` : undefined}
+            aria-invalid={fileError ? true : undefined}
+            className="block w-full text-base file:mr-3 file:min-h-11 file:cursor-pointer file:rounded-sm file:border file:border-rule-strong file:bg-surface file:px-4 file:text-base file:text-ink hover:file:bg-sunken"
+            onChange={(e) => pick(e.target.files?.[0] ?? null)}
+          />
+          {fileError && (
+            <p
+              id={`${inputId}-error`}
+              role="alert"
+              className="mt-1.5 text-sm font-medium text-danger"
+            >
+              {fileError}
+            </p>
+          )}
+          {file && (
+            <p className="mt-1.5 text-sm text-ink-muted">
+              <span lang="en" className="break-all">
+                {file.name}
+              </span>
+              , {formatKilobytes(file.size)}
+            </p>
+          )}
+        </div>
+        <TextField
+          label="নথির শিরোনাম"
+          hint="তালিকায় এই নামে দেখাবে"
+          value={title}
+          error={titleError}
+          disabled={uploading}
           onChange={(e) => {
-            const f = e.target.files?.[0]
-            e.target.value = ""
-            if (!f) return
-            if (!ALLOWED.includes(f.type)) {
-              setError(
-                "এই ধরনের ফাইল নেওয়া যায় না। পিডিএফ, জেপিজি বা পিএনজি বেছে নিন।",
-              )
-              setFile(null)
-            } else if (f.size > MAX_BYTES) {
-              setError("ফাইলটি ১০ এমবির বেশি বড়।")
-              setFile(null)
-            } else {
-              setError("")
-              setFile({ name: f.name, size: f.size })
-            }
+            setTitle(e.target.value)
+            setTitleError("")
           }}
         />
-        {error && (
-          <p
-            id={`${inputId}-error`}
-            className="mt-1.5 text-sm font-medium text-danger"
-          >
-            {error}
-          </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          onClick={() => void submit()}
+          loading={uploading}
+          loadingLabel={
+            progress === null
+              ? "আপলোড হচ্ছে…"
+              : `আপলোড হচ্ছে… ${toBengaliDigits(progress)}%`
+          }
+          icon="upload"
+          disabled={!file}
+        >
+          ফাইল আপলোড করুন
+        </Button>
+        {uploading && (
+          <span role="status" className="text-sm text-ink-muted">
+            সংযোগ ধরে রাখুন, পাতা বন্ধ করবেন না।
+          </span>
         )}
       </div>
-      {file && (
-        <Notice
-          tone="info"
-          title="ফাইল বেছে নেওয়া হয়েছে (শুধু এই ট্যাবে)"
-          onDismiss={() => setFile(null)}
-        >
-          <span lang="en" className="break-all">
-            {file.name}
-          </span>
-          , {formatNumber(Math.max(1, Math.round(file.size / 1024)))} কেবি। কোথাও
-          জমা হয়নি।
+
+      {success && (
+        <Notice tone="success" title="আপলোড সম্পন্ন">
+          {success}
+        </Notice>
+      )}
+      {failure && (
+        <Notice tone="danger" title="আপলোড ব্যর্থ হয়েছে">
+          {failure}
         </Notice>
       )}
     </Panel>
@@ -125,36 +270,53 @@ function DocRow({ d, related }: { d: DocumentItem; related: string }) {
 
 export default function DocumentsPage() {
   const [filter, setFilter] = useState("all")
+  const [justUploaded, setJustUploaded] = useState<DocumentItem[]>([])
+  const live = isCurrentSessionLive()
+
   return (
     <Page
       title="নথিপত্র"
       breadcrumbs={crumbs("documents")}
-      description="আপনার আবেদন ও রেকর্ডের সঙ্গে যুক্ত নমুনা নথি। কোনটি জমা বাকি, কোনটি দেখা হচ্ছে।"
+      description={
+        live
+          ? "আপনার আপলোড করা ও আবেদনের সঙ্গে যুক্ত নথি। কোনটি জমা বাকি, কোনটি দেখা হচ্ছে।"
+          : "আপনার আবেদন ও রেকর্ডের সঙ্গে যুক্ত নমুনা নথি। কোনটি জমা বাকি, কোনটি দেখা হচ্ছে।"
+      }
     >
       <div className="space-y-10">
         <WithApplicantData>
           {(data) => {
-            if (data.documents.length === 0)
+            const documents = [
+              ...justUploaded,
+              ...data.documents.filter(
+                (d) => !justUploaded.some((u) => u.id === d.id),
+              ),
+            ]
+            if (documents.length === 0)
               return (
                 <EmptyState title="কোনো নথি নেই" icon="folder">
-                  আবেদন করলে সংশ্লিষ্ট নথির তালিকা এখানে দেখাবে।
+                  {live
+                    ? "নিচের ফর্ম থেকে নথি আপলোড করুন; সেগুলো এখানে দেখা যাবে।"
+                    : "আবেদন করলে সংশ্লিষ্ট নথির তালিকা এখানে দেখাবে।"}
                 </EmptyState>
               )
             const related = (d: DocumentItem) => {
               const a = data.applications.find((x) => x.id === d.applicationId)
               const p = data.parcels.find((x) => x.id === d.parcelId)
-              return [
-                a &&
-                  `${applicationTypeLabel[a.type]} (${a.trackingNumber ?? "খসড়া"})`,
-                p && `খতিয়ান ${toBengaliDigits(p.khatianNumber)}`,
-              ]
-                .filter(Boolean)
-                .join(", ")
+              return (
+                [
+                  a &&
+                    `${applicationTypeLabel[a.type]} (${a.trackingNumber ?? "খসড়া"})`,
+                  p && `খতিয়ান ${toBengaliDigits(p.khatianNumber)}`,
+                ]
+                  .filter(Boolean)
+                  .join(", ") || (live ? "সংযুক্তি তথ্য নেই" : "")
+              )
             }
-            const visible = data.documents.filter(
+            const visible = documents.filter(
               (d) => filter === "all" || d.status === filter,
             )
-            const pending = data.documents.filter(
+            const pending = documents.filter(
               (d) => d.status === "requested",
             ).length
             return (
@@ -172,7 +334,7 @@ export default function DocumentsPage() {
                   />
                 </div>
                 <p role="status" className="mb-3 text-sm text-ink-muted">
-                  {formatNumber(data.documents.length)}টির মধ্যে{" "}
+                  {formatNumber(documents.length)}টির মধ্যে{" "}
                   {formatNumber(visible.length)}টি নথি
                 </p>
                 {visible.length === 0 ? (
@@ -199,7 +361,14 @@ export default function DocumentsPage() {
             )
           }}
         </WithApplicantData>
-        <LocalPicker />
+        <UploadPanel
+          onUploaded={(doc) =>
+            setJustUploaded((prev) => [
+              doc,
+              ...prev.filter((d) => d.id !== doc.id),
+            ])
+          }
+        />
       </div>
     </Page>
   )

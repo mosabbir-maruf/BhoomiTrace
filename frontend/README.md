@@ -11,7 +11,7 @@ Built with **React 19**, **TypeScript 5.7**, **Vite 8**, and **Tailwind CSS v4**
 - **Citizen Dashboard & Records Desk**: Inspect land parcels (khatian, dag, mouza, area, and ownership share) with multi-survey historical lineage (CS, SA, RS, BS).
 - **Automated Verification & Discrepancies**: Displays automated rule checks (area consistency, CS-to-RS lineage continuity, share sums, document completeness) with reassuring guidance that survey differences represent administrative discrepancies rather than fraud allegations.
 - **Application Workflow & Tracking**: Submit and track mutation, record correction, and certified copy applications through realistic lifecycle states with optimistic concurrency version tokens and bilingual Bengali/English input validation.
-- **Document Evidence Desk**: Review source documents, stream-download stored files (`/api/v1/documents/:id/file`), review extractions, and inspect document verification status safely.
+- **Document Evidence Desk**: Stream-download real stored files (`/api/v1/documents/:id/file`) and inspect document status. The interactive extraction-review desk is a clearly-labelled prototype: it runs only in demo mode and refuses to record a decision against the live backend, because it holds no real extraction identifiers or server version tokens (see *Known backend contract gaps*).
 - **Reviewer Queue**: Review open filings and recorded discrepancies, with live interactive decision recording (`under_review`, `resolved`, `dismissed`) with mandatory justification notes persisted to the backend audit trail.
 
 ---
@@ -62,6 +62,30 @@ pnpm run build
 # Preview the production build locally
 pnpm run preview
 ```
+
+### Browser end-to-end tests
+
+The upload, authentication, CSRF and live/demo-copy paths are covered by
+Playwright specs under `tests/`, driving the real SPA against a running backend
+(no mocked responses). The dev server is started automatically and proxies `/api`
+to `E2E_API_URL`.
+
+```bash
+# Backend and database must be running first (e.g. `docker compose up -d`)
+pnpm exec playwright install chromium   # once per machine
+pnpm test:e2e
+
+# Point at another origin if the defaults do not fit
+E2E_BASE_URL=http://127.0.0.1:5173 E2E_API_URL=http://127.0.0.1:3000 pnpm test:e2e
+```
+
+The suite registers one synthetic account per run (`tests/e2e/global-setup.ts`),
+so it never touches a real identity and stays well inside the auth rate limit.
+These specs are outside the `pnpm test` glob and the app `tsconfig.json`, so the
+standard CI checks stay browser-free.
+
+> Wiring `pnpm test:e2e` into CI (which needs a browser download and a live
+> Compose stack) is an infrastructure change, deliberately left to the CI owner.
 
 ---
 
@@ -138,14 +162,67 @@ The application adheres to the backend's strict security architecture:
 | **Reconciliation & Rules** | `GET /api/v1/parcels/:id/reconciliation` | Returns deterministic rule outcomes and readiness status | `src/lib/api/review.ts: fetchParcelReconciliation()` |
 | **Findings** | `GET /api/v1/parcels/:id/findings` | Returns array of open discrepancy findings | `src/lib/api/review.ts: fetchParcelFindings()` |
 | **Application Submission** | `POST /api/v1/applications` + `POST /:id/transitions` | Creates draft application, then transitions to `submitted`, assigning sequence tracking number | `src/lib/api/applications.ts: submitApplication()` |
-| **Application Detail** | `GET /api/v1/applications/:id` | Returns application detail, server `today`, and timeline audit trail | `src/lib/api/dashboard.ts: fetchApplication()` |
+| **Application Detail** | `GET /api/v1/applications/:id` | Returns application detail, server `today`, timeline audit trail, and the declared document checklist (`declaredDocuments`) | `src/lib/api/dashboard.ts: fetchApplication()` |
 | **Reviewer Queue** | `GET /api/v1/review/queue` | Returns `{ pendingExtractions, openFindings, totals }` | `src/lib/api/review.ts: fetchReviewQueue(), fetchAllFindings()` |
 | **Reviewer Cases** | `GET /api/v1/applications?limit=50` | Returns reviewer-visible filings mapped to review cases | `src/lib/api/review.ts: fetchReviewCases()` |
 | **Finding Decision** | `POST /api/v1/findings/:id/review` | Body: `{ action, reason, version }` → Appends audit decision | `src/lib/api/review.ts: recordFindingReview()` |
-| **Extraction Decision** | `POST /api/v1/extractions/:id/review` | Body: `{ outcome, correctedValue, note, version }` | `src/lib/api/review.ts: recordReviewOutcome()` |
+| **Extraction Decision** | `POST /api/v1/extractions/:extractionId/review` | Body: `{ outcome, correctedValue, note, version }`. **Prototype only**: the live call is refused (`extraction_review_not_implemented`) because the prototype has no real UUID or server version | `src/lib/api/review.ts: recordReviewOutcome()` |
 | **Document Stream** | `GET /api/v1/documents/:id/file` | Streams raw PDF/image file bytes with Content-Disposition header | `src/lib/api/client.ts: apiDownload()` |
-| **Document Upload** | `POST /api/v1/documents/upload?title=...&kind=...` | Streams single multipart file part into private backend storage | `src/lib/api/client.ts: apiPost()` |
+| **Document Upload** | `POST /api/v1/documents/upload?title=...&kind=...&reference=...` | One `multipart/form-data` file part into private backend storage. Auth via `bt_session` cookie + `x-csrf-token`; server sniffs PDF/PNG/JPEG and caps at `UPLOAD_MAX_BYTES` (5 MiB) | `src/lib/api/documents.ts: uploadDocument()` |
 
 ### Client-Side Demo Fallback
 
 When operating without a backend server or in explicit demo mode (via `#/demo/citizen` or `#/demo/reviewer`), the client falls back to the local demo mock data provider (`src/mocks/service.ts`), allowing full offline exploration and UI demonstration.
+
+---
+
+## Known backend contract gaps
+
+These are backend-owned changes the frontend cannot make on its own. Until they
+land, the frontend shows the honest alternative described beside each one.
+
+### 1. Per-application document linkage (Agent 1)
+
+**Problem.** `GET /api/v1/documents` returns the caller's documents but no
+`applicationId` or `parcelId`, so nothing links an uploaded file to the
+application it was submitted for. The application detail screen previously
+listed the entire document collection as if it belonged to the open
+application, which mislabels unrelated files.
+
+**Frontend behaviour today.** `fetchApplication()` no longer attaches any
+document rows, and the detail screen renders the real
+`declaredDocuments` checklist instead. `DocumentItem.applicationId` is always
+`null` in live mode.
+
+**Contract change requested.** Add an optional application association to the
+document resource and expose it in both directions:
+
+- `POST /api/v1/documents` and `POST /api/v1/documents/upload` accept an
+  optional `applicationId` query parameter (UUID, must reference an application
+  the caller can see).
+- `documentSchema` includes `applicationId: uuid | null` (and, if a document can
+  also attach to a parcel, `parcelId: uuid | null`).
+- Optionally, `GET /api/v1/applications/:id/documents` returns the documents
+  linked to that application, so the detail screen can list real files.
+
+Once `documentSchema.applicationId` exists, the frontend can populate
+`DocumentItem.applicationId`, restore document rows on the detail screen, and
+have the upload flow pass the current application id.
+
+### 2. Real extraction review (Agent 1)
+
+**Problem.** The interactive extraction-review desk needs a real extraction UUID
+and the server's current `version` for each field, plus a supported `outcome`
+vocabulary. The prototype is driven by synthetic fixtures, so none of those are
+available.
+
+**Frontend behaviour today.** The desk is reachable only in demo mode and is
+labelled as a prototype; `recordReviewOutcome()` refuses in live mode with
+`extraction_review_not_implemented` rather than posting a fabricated id.
+
+**Contract change requested.** Expose the pending extraction list with
+`extractionId` (UUID) and `version` (number) per field — for example through the
+existing `GET /api/v1/review/queue` `pendingExtractions`. The review endpoint
+already accepts `outcome` of `verified`, `correction`, or `needs_review`; the
+frontend will drop the prototype's `dismissed` option when it is wired for real.
+
