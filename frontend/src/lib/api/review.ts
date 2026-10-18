@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "./client"
+import { ApiError, apiGet, apiPost } from "./client"
 import { isDemoMode } from "./session"
 import type {
   BackendApplication,
@@ -156,6 +156,17 @@ export async function recordFindingReview(
 
 /**
  * Records a reviewer decision on an extracted field value.
+ *
+ * The interactive extraction-review desk is a prototype driven by synthetic
+ * fixtures, so it holds neither the real extraction UUID nor the server's
+ * current version token. Posting a fixture identifier and a guessed version to
+ * the live endpoint would fail obscurely at best and misrepresent a mock
+ * decision as a recorded one at worst, so this refuses outright in live mode.
+ *
+ * The endpoint a future, real integration must target is
+ * `POST /api/v1/extractions/:extractionId/review`, which takes a UUID
+ * `extractionId`, the server-issued `version`, and an `outcome` of `verified`,
+ * `correction`, or `needs_review` (`dismissed` is not part of that vocabulary).
  */
 export async function recordReviewOutcome(
   input: ReviewOutcomeInput,
@@ -164,19 +175,9 @@ export async function recordReviewOutcome(
     return mockRecordReviewOutcome(input)
   }
 
-  const res = await apiPost<{
-    extraction: unknown
-    decision: { id: string; createdAt: string }
-  }>(`/api/v1/extractions/${encodeURIComponent(input.fieldId)}/review`, {
-    outcome: input.outcome,
-    correctedValue: input.proposedValue,
-    note: input.note,
-    version: input.version ?? 1,
-  })
-
-  return {
-    ...input,
-    recordedAt: res.decision?.createdAt ?? new Date().toISOString(),
-    demo: false,
-  }
+  throw new ApiError(
+    "এই সংস্করণে সরাসরি নথি-যাচাই সিদ্ধান্ত জমা দেওয়া সমর্থিত নয়। পর্যালোচনার কার্যতালিকা ব্যবহার করুন।",
+    501,
+    "extraction_review_not_implemented",
+  )
 }

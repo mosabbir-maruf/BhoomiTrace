@@ -7,6 +7,7 @@ import type {
   NewApplicationResult,
 } from "@/lib/api/types"
 import { applicationTypeLabel } from "@/lib/domain"
+import { isCurrentSessionLive } from "@/lib/api/session"
 import { toAsciiDigits, toBengaliDigits } from "@/lib/format"
 import { routeHref } from "@/config/navigation"
 import { navigate, useRoute } from "@/hooks/useHashRoute"
@@ -137,6 +138,7 @@ function Wizard({
   const headingRef = useRef<HTMLHeadingElement>(null)
   const errorRef = useRef<HTMLDivElement>(null)
   const firstRender = useRef(true)
+  const live = isCurrentSessionLive()
 
   useEffect(() => {
     if (firstRender.current) {
@@ -497,8 +499,10 @@ function Wizard({
             <fieldset aria-describedby="docs-hint">
               <legend className="font-medium">কোন নথিগুলো আপনার কাছে আছে?</legend>
               <p id="docs-hint" className="mb-3 text-sm text-ink-muted">
-                তারকা (*) চিহ্নিতগুলো এই নমুনা তালিকায় দরকারি। আসল নিয়ম জানতে ভূমি অফিসের
-                নির্দেশনা দেখুন। ডেমোতে ফাইল আপলোড হয় না।
+                তারকা (*) চিহ্নিতগুলো এই তালিকায় দরকারি।{" "}
+                {live
+                  ? "এখানে শুধু নথির তালিকা চিহ্নিত করা হয়; ফাইল আপলোড নথিপত্র পাতা থেকে করা যায়।"
+                  : "আসল নিয়ম জানতে ভূমি অফিসের নির্দেশনা দেখুন। ডেমোতে ফাইল আপলোড হয় না।"}
               </p>
               <div className="space-y-2">
                 {docsFor[draft.type].map((doc) => (
@@ -562,7 +566,10 @@ function Wizard({
               </dl>
               {failed && (
                 <div className="mt-4">
-                  <Notice tone="danger" title="ডেমো সম্পন্ন করা যায়নি">
+                  <Notice
+                    tone="danger"
+                    title={live ? "আবেদন জমা দেওয়া যায়নি" : "ডেমো সম্পন্ন করা যায়নি"}
+                  >
                     আপনার তথ্য এখানেই আছে। আবার চেষ্টা করুন।
                   </Notice>
                 </div>
@@ -618,9 +625,13 @@ function Wizard({
                 type="submit"
                 size="lg"
                 loading={submitting}
-                loadingLabel="সম্পন্ন হচ্ছে…"
+                loadingLabel={live ? "জমা হচ্ছে…" : "সম্পন্ন হচ্ছে…"}
               >
-                {step === steps.length - 1 ? "ডেমো আবেদন সম্পন্ন করুন" : "পরের ধাপ"}
+                {step === steps.length - 1
+                  ? live
+                    ? "আবেদন জমা দিন"
+                    : "ডেমো আবেদন সম্পন্ন করুন"
+                  : "পরের ধাপ"}
               </Button>
             </div>
           )}
@@ -636,7 +647,11 @@ export default function NewApplication() {
     <Page
       title={id === "continue-application" ? "খসড়া আবেদন" : "নতুন আবেদন"}
       breadcrumbs={crumbs(id)}
-      description="ধাপে ধাপে তথ্য দিন। এটি ডেমো; শেষে কিছুই কোথাও জমা হবে না।"
+      description={
+        isCurrentSessionLive()
+          ? "ধাপে ধাপে তথ্য দিন। শেষ ধাপে আবেদন সার্ভারে জমা হবে।"
+          : "ধাপে ধাপে তথ্য দিন। এটি ডেমো; শেষে কিছুই কোথাও জমা হবে না।"
+      }
     >
       {children}
     </Page>

@@ -397,8 +397,9 @@ function FindingTable({ findings }: { findings: Finding[] }) {
                         সিদ্ধান্ত লিপিবদ্ধ করুন: {f.title}
                       </h4>
                       <p className="text-xs text-ink-muted">
-                        সিদ্ধান্ত শুধুমাত্র এই ট্যাবে সংরক্ষিত হয়। মীমাংসা বা খারিজ করতে কারণ
-                        উল্লেখ বাধ্যতামূলক।
+                        {isCurrentSessionLive()
+                          ? "সিদ্ধান্ত BhoomiTrace অডিট ট্রেইলে সংরক্ষিত হয়। মীমাংসা বা খারিজ করতে কারণ উল্লেখ বাধ্যতামূলক।"
+                          : "সিদ্ধান্ত শুধুমাত্র এই ট্যাবে সংরক্ষিত হয়। মীমাংসা বা খারিজ করতে কারণ উল্লেখ বাধ্যতামূলক।"}
                       </p>
 
                       <div className="flex flex-wrap gap-2">

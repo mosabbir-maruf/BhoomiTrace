@@ -69,7 +69,7 @@ function toApplicationSummary(a: BackendApplication): ApplicationSummary {
 /**
  * Maps a backend document to a frontend DocumentItem.
  */
-function toDocumentItem(
+export function toDocumentItem(
   d: BackendDocument,
   applicationId?: string | null,
   parcelId?: string | null,
@@ -198,22 +198,19 @@ export async function fetchApplication(
     }
   }
 
-  let documents: DocumentItem[] = []
-  try {
-    const docs = await apiGet<Page<BackendDocument>>(
-      "/api/v1/documents?limit=20",
-      signal,
-    )
-    documents = docs.items.map((d) => toDocumentItem(d, app.id, app.parcelId))
-  } catch {
-    // optional
-  }
+  const documents: DocumentItem[] = []
+  const declaredDocuments = app.declaredDocuments
 
   return {
     ...toApplicationSummary(app),
     today: app.today || new Date().toISOString().slice(0, 10),
     timeline: app.timeline || [],
     decisionNote: app.decisionNote,
+    declaredDocuments,
+    // The API exposes no per-application document linkage, so no document rows
+    // are attached in live mode. Showing the caller's whole document list here
+    // would mislabel unrelated files as this application's. The exact contract
+    // change required is recorded in frontend/README.md.
     documents,
     parcel,
   }

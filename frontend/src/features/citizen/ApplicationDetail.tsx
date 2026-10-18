@@ -4,6 +4,7 @@ import {
   applicationStatusExplain,
   applicationStatusMeta,
   applicationTypeLabel,
+  declaredDocumentLabelFor,
   documentStatusMeta,
 } from "@/lib/domain"
 import {
@@ -12,6 +13,7 @@ import {
   formatShare,
   toBengaliDigits,
 } from "@/lib/format"
+import { isCurrentSessionLive } from "@/lib/api/session"
 import { routeHref } from "@/config/navigation"
 import { useRoute } from "@/hooks/useHashRoute"
 import Load from "@/hooks/useLoader"
@@ -63,7 +65,7 @@ function primaryAction(app: Detail) {
 
 function Body({ app }: { app: Detail }) {
   const status = applicationStatusMeta[app.status]
-  const requested = app.documents.filter((d) => d.status === "requested")
+  const live = isCurrentSessionLive()
   const facts: [string, string][] = [
     ["ট্র্যাকিং নম্বর", trackingLabel(app)],
     ["জমার তারিখ", app.submittedAt ? formatDate(app.submittedAt) : "জমা হয়নি"],
@@ -173,36 +175,58 @@ function Body({ app }: { app: Detail }) {
         <h2 id="docs-h" className="mb-1 text-xl font-semibold">
           নথির তালিকা
         </h2>
-        <p className="mb-3 text-sm text-ink-muted">
-          {requested.length > 0
-            ? `${formatNumber(requested.length)}টি নথি এখনো জমা বাকি।`
-            : "চাওয়া সব নথি জমা হয়েছে, অথবা কোনো নথি চাওয়া হয়নি।"}{" "}
-          এই তালিকা নমুনা; আসল নিয়ম জানতে সংশ্লিষ্ট ভূমি অফিসের নির্দেশনা দেখুন।
-        </p>
-        {app.documents.length === 0 ? (
+        {app.declaredDocuments.length > 0 ? (
+          <>
+            <p className="mb-3 text-sm text-ink-muted">
+              আবেদন জমা দেওয়ার সময় এই নথির ধরনগুলো ঘোষণা করা হয়েছিল।
+              {live &&
+                " আপলোড করা ফাইলের সঙ্গে আবেদনের সরাসরি সংযোগ এখনো ব্যাকএন্ড এপিআই-তে নেই, তাই এখানে ঘোষিত তালিকা দেখানো হচ্ছে।"}
+            </p>
+            <ul className="divide-y divide-rule rounded-md border border-rule bg-surface">
+              {app.declaredDocuments.map((code) => (
+                <li
+                  key={code}
+                  className="flex flex-wrap items-center justify-between gap-3 px-5 py-3"
+                >
+                  <span className="font-medium">
+                    {declaredDocumentLabelFor(code)}
+                  </span>
+                  <span lang="en" className="text-xs text-ink-muted">
+                    {code}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : app.documents.length === 0 ? (
           <p className="rounded-md bg-surface px-5 py-4 text-ink-muted">
             এই আবেদনের সঙ্গে কোনো নথি যুক্ত নেই।
           </p>
         ) : (
-          <ul className="divide-y divide-rule rounded-md border border-rule bg-surface">
-            {app.documents.map((d) => (
-              <li
-                key={d.id}
-                className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-start sm:justify-between"
-              >
-                <div className="min-w-0">
-                  <a
-                    href={routeHref("document", d.id)}
-                    className="font-semibold text-accent underline decoration-accent/30 underline-offset-4 hover:decoration-accent"
-                  >
-                    {d.name}
-                  </a>
-                  <p className="text-ink-muted">{d.note}</p>
-                </div>
-                <StatusBadge {...documentStatusMeta[d.status]} />
-              </li>
-            ))}
-          </ul>
+          <>
+            <p className="mb-3 text-sm text-ink-muted">
+              এই তালিকা নমুনা; আসল নিয়ম জানতে সংশ্লিষ্ট ভূমি অফিসের নির্দেশনা দেখুন।
+            </p>
+            <ul className="divide-y divide-rule rounded-md border border-rule bg-surface">
+              {app.documents.map((d) => (
+                <li
+                  key={d.id}
+                  className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-start sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <a
+                      href={routeHref("document", d.id)}
+                      className="font-semibold text-accent underline decoration-accent/30 underline-offset-4 hover:decoration-accent"
+                    >
+                      {d.name}
+                    </a>
+                    <p className="text-ink-muted">{d.note}</p>
+                  </div>
+                  <StatusBadge {...documentStatusMeta[d.status]} />
+                </li>
+              ))}
+            </ul>
+          </>
         )}
       </section>
 
@@ -232,7 +256,11 @@ export default function ApplicationDetailPage() {
         <Page
           title={applicationTypeLabel[app.type]}
           breadcrumbs={crumbs("application", app.trackingNumber ?? "খসড়া")}
-          description={`${app.mouza} মৌজা, দাগ ${toBengaliDigits(app.dagNumber)}। নমুনা আবেদন, কোনো আসল জমার রেকর্ড নয়।`}
+          description={`${app.mouza} মৌজা, দাগ ${toBengaliDigits(app.dagNumber)}।${
+            isCurrentSessionLive()
+              ? " BhoomiTrace-এ জমা দেওয়া আবেদন।"
+              : " নমুনা আবেদন, কোনো আসল জমার রেকর্ড নয়।"
+          }`}
         >
           <Body app={app} />
         </Page>

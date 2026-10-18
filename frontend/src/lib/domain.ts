@@ -37,6 +37,25 @@ export const documentStatusMeta: Record<DocumentStatus, StatusMeta> = {
   submitted: { label: "জমা হয়েছে", tone: "success", icon: "check" },
 }
 
+/**
+ * Human labels for the checklist codes a filing declares at submission.
+ *
+ * These are the codes the API accepts on `POST /applications` (`deed`, `id`,
+ * `khatian`, `tax`, `heir`). An unknown code falls back to the raw value so a
+ * server-side vocabulary change is visible rather than silently dropped.
+ */
+export const declaredDocumentLabel: Record<string, string> = {
+  deed: "দলিলের কপি",
+  id: "পরিচয়পত্রের কপি",
+  khatian: "খতিয়ান/খতিয়ানের কপি",
+  tax: "খাজনা পরিশোধের রসিদ",
+  heir: "ওয়ারিশ সনদ",
+}
+
+export function declaredDocumentLabelFor(code: string): string {
+  return declaredDocumentLabel[code] ?? code
+}
+
 export const caseStatusMeta: Record<CaseStatus, StatusMeta> = {
   needs_info: { label: "আরও যাচাই দরকার", tone: "warning", icon: "alert" },
   new: { label: "নতুন", tone: "info", icon: "info" },

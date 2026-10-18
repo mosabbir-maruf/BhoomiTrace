@@ -127,6 +127,7 @@ export async function mockFetchApplication(
   return structuredClone({
     ...app,
     today: DEMO_TODAY,
+    declaredDocuments: [],
     documents: documents.filter((d) => d.applicationId === id),
     parcel: parcels.find((p) => p.id === app.parcelId) ?? null,
   })
