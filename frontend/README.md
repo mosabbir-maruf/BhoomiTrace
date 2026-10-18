@@ -1,8 +1,27 @@
+<div align="center">
+
+<img src="public/favicon.svg" alt="BhoomiTrace" width="100" height="100" />
+
 # BhoomiTrace — Frontend
 
-The web interface for **BhoomiTrace**, a land-record verification and mutation application tracking platform for Bangladesh (LandTech 2026 hackathon demo).
+### The web interface for BhoomiTrace — land-record verification and mutation application tracking for Bangladesh
 
-Built with **React 19**, **TypeScript 5.7**, **Vite 8**, and **Tailwind CSS v4**.
+**Track:** LandTech 2026 &nbsp;·&nbsp; **Challenge:** AI-assisted land-record verification
+
+### 🌐 [Live Demo — devtree.online](https://devtree.online/)
+
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-devtree.online-2ea44f?style=flat-square)](https://devtree.online/)
+[![CI](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml)
+[![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/mosabbir-maruf/BhoomiTrace/pkgs/container/bhoomitrace-frontend)
+[![License: MIT](https://img.shields.io/badge/License-MIT-3DA639?style=flat-square)](../LICENSE)
+
+![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
+![TypeScript 5.7](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Vite 8](https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite&logoColor=white)
+![Tailwind CSS 4](https://img.shields.io/badge/Tailwind%20CSS-4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)
+![Node.js 24](https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)
+
+</div>
 
 ---
 
