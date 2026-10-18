@@ -1,10 +1,15 @@
 <div align="center">
 
-<img src="public/favicon.svg" alt="BhoomiTrace" width="100" height="100" />
+<img src="public/favicon.svg" alt="BhoomiTrace" width="120" height="120" />
 
 # BhoomiTrace — Frontend
 
-### The web interface for BhoomiTrace — land-record verification and mutation application tracking for Bangladesh
+### AI-assisted land-record verification and parcel-lineage platform
+
+BhoomiTrace extracts values from land records with source links, keeps raw and
+reviewed values separate, tracks parcel lineage (split / merge / renumbering),
+reconciles areas and shares, and surfaces explainable findings with a full review
+and audit trail.
 
 **Track:** LandTech 2026 &nbsp;·&nbsp; **Challenge:** AI-assisted land-record verification
 
@@ -12,236 +17,259 @@
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-devtree.online-2ea44f?style=flat-square)](https://devtree.online/)
 [![CI](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml)
-[![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/mosabbir-maruf/BhoomiTrace/pkgs/container/bhoomitrace-frontend)
+[![Backend image](https://img.shields.io/badge/image-bhoomitrace--backend-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/mosabbir-maruf/packages/container/bhoomitrace-backend)
+[![Frontend image](https://img.shields.io/badge/image-bhoomitrace--frontend-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/mosabbir-maruf/packages/container/bhoomitrace-frontend)
 [![License: MIT](https://img.shields.io/badge/License-MIT-3DA639?style=flat-square)](../LICENSE)
 
-![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
-![TypeScript 5.7](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white)
-![Vite 8](https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite&logoColor=white)
-![Tailwind CSS 4](https://img.shields.io/badge/Tailwind%20CSS-4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)
-![Node.js 24](https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)
+[![Node.js 24](https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![TypeScript 5.7](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
+[![Vite 8](https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vite.dev/)
+[![Tailwind CSS 4](https://img.shields.io/badge/Tailwind%20CSS-4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 
 </div>
 
 ---
 
-## Overview & Key Capabilities
+This document covers the **frontend only**: setup, structure, the API client and
+proxy, session/CSRF behaviour, tests, and the frontend container. Server-side
+details — routes and their contracts, database schema, authentication rules,
+uploads, audit, and the worker — live in
+[`../backend/README.md`](../backend/README.md).
 
-- **Citizen Dashboard & Records Desk**: Inspect land parcels (khatian, dag, mouza, area, and ownership share) with multi-survey historical lineage (CS, SA, RS, BS).
-- **Automated Verification & Discrepancies**: Displays automated rule checks (area consistency, CS-to-RS lineage continuity, share sums, document completeness) with reassuring guidance that survey differences represent administrative discrepancies rather than fraud allegations.
-- **Application Workflow & Tracking**: Submit and track mutation, record correction, and certified copy applications through realistic lifecycle states with optimistic concurrency version tokens and bilingual Bengali/English input validation.
-- **Document Evidence Desk**: Stream-download real stored files (`/api/v1/documents/:id/file`) and inspect document status. The interactive extraction-review desk is a clearly-labelled prototype: it runs only in demo mode and refuses to record a decision against the live backend, because it holds no real extraction identifiers or server version tokens (see *Known backend contract gaps*).
-- **Reviewer Queue**: Review open filings and recorded discrepancies, with live interactive decision recording (`under_review`, `resolved`, `dismissed`) with mandatory justification notes persisted to the backend audit trail.
+## Overview
 
----
+The BhoomiTrace SPA is the interface a citizen or a land-office reviewer uses. It
+is a React 19 application built by Vite and styled with Tailwind CSS v4, talking to
+the Fastify API over relative `/api/v1` paths.
 
-## Tech Stack
+**Key capabilities**
 
-- **Runtime & UI**: React 19, React DOM 19
-- **Styling**: Tailwind CSS v4 (`@tailwindcss/vite`)
-- **Build Tooling**: Vite 8, TypeScript 5.7
-- **Code Quality**: oxfmt, TypeScript strict checks
+- **Citizen dashboard & records desk** — inspect parcels (khatian, dag, mouza, area,
+  ownership share) with multi-survey historical lineage (CS, SA, RS, BS).
+- **Automated verification & discrepancies** — rule outcomes for area consistency,
+  CS-to-RS lineage continuity, share sums, and document completeness, worded so that
+  a survey difference reads as an administrative discrepancy, not an allegation of
+  fraud.
+- **Application workflow & tracking** — submit and track mutation, record-correction,
+  and certified-copy applications through their lifecycle states, with optimistic
+  concurrency version tokens and bilingual Bengali/English input validation.
+- **Document evidence desk** — stream-download stored files from
+  `/api/v1/documents/:id/file` and inspect document status. The interactive
+  extraction-review desk is a labelled prototype that runs only in demo mode.
+- **Reviewer queue** — review open filings and recorded discrepancies, and record
+  decisions (`under_review`, `resolved`, `dismissed`) with a mandatory justification
+  note that persists to the backend audit trail.
 
----
+## Tech stack
 
-## Getting Started
+| Concern | Choice |
+| ------- | ------ |
+| Runtime & UI | React 19, React DOM 19 |
+| Language | TypeScript 5.7 (strict) |
+| Build | Vite 8, `@vitejs/plugin-react` |
+| Styling | Tailwind CSS v4 via `@tailwindcss/vite` |
+| Formatting | oxfmt |
+| Tests | Node's built-in test runner, plus Playwright for browser end-to-end |
+| Serving | Unprivileged nginx (`nginxinc/nginx-unprivileged:1.30.6-alpine`) |
 
-### Prerequisites
+## Prerequisites
 
-- Node.js 20+
-- `pnpm` 9+ (or `npm`)
+- **Node.js 24** — the version the CI job and the container build both use.
+- **pnpm 9** — the lockfile is `pnpm-lock.yaml`. `npm` will not reproduce it
+  faithfully.
 
-### Installation
+## Getting started
 
 ```bash
-# From the frontend directory:
+cd frontend
 pnpm install
-```
-
-### Local Development
-
-```bash
 pnpm run dev
 ```
 
-The Vite development server will start on `http://localhost:5173` (matching backend CORS defaults).
-
-### Test, Typecheck & Build
+The dev server listens on <http://localhost:5173>, which is already in the backend's
+default `CORS_ALLOWED_ORIGINS`. It needs a running API to show real data; without
+one the app still loads, and the explicit demo routes below fall back to local mock
+data.
 
 ```bash
-# Run unit and contract tests
-pnpm test
+# start the backend + database from the repository root first
+docker compose up -d --build
 
-# Run TypeScript compilation check
-pnpm exec tsc --noEmit
+cd frontend
+pnpm run dev
+```
 
-# Build production bundle
-pnpm run build
+## Tests, typecheck, and build
 
-# Preview the production build locally
-pnpm run preview
+```bash
+pnpm test                 # unit and contract tests (no browser)
+pnpm exec tsc --noEmit    # typecheck
+pnpm run build            # production bundle -> dist/
+pnpm run preview          # serve the built bundle locally
+pnpm run format           # oxfmt
 ```
 
 ### Browser end-to-end tests
 
-The upload, authentication, CSRF and live/demo-copy paths are covered by
-Playwright specs under `tests/`, driving the real SPA against a running backend
-(no mocked responses). The dev server is started automatically and proxies `/api`
-to `E2E_API_URL`.
+The Playwright specs under `tests/e2e/` drive the real SPA against a running
+backend — upload, authentication, CSRF, and the live/demo copy paths — with no
+mocked responses. The dev server is started automatically and proxies `/api` to
+`E2E_API_URL`.
 
 ```bash
-# Backend and database must be running first (e.g. `docker compose up -d`)
+# the backend must be running first: docker compose up -d --build
 pnpm exec playwright install chromium   # once per machine
 pnpm test:e2e
 
-# Point at another origin if the defaults do not fit
+# point at another origin if the defaults do not fit
 E2E_BASE_URL=http://127.0.0.1:5173 E2E_API_URL=http://127.0.0.1:3000 pnpm test:e2e
 ```
 
-The suite registers one synthetic account per run (`tests/e2e/global-setup.ts`),
-so it never touches a real identity and stays well inside the auth rate limit.
-These specs are outside the `pnpm test` glob and the app `tsconfig.json`, so the
-standard CI checks stay browser-free.
+A single synthetic account is registered per run by `tests/e2e/global-setup.ts`, so
+the suite never touches a real identity and stays inside the authentication rate
+limit. These specs sit outside the `pnpm test` glob and the app `tsconfig.json`, so
+the standard checks stay fast and browser-free.
 
-> Wiring `pnpm test:e2e` into CI (which needs a browser download and a live
-> Compose stack) is an infrastructure change, deliberately left to the CI owner.
+> Wiring `pnpm test:e2e` into CI needs a browser download and a live Compose stack.
+> It is deliberately not part of `.github/workflows/ci.yml`.
 
----
+## Container
 
-## Docker
+`frontend/Dockerfile` is a multi-stage build: it compiles the Vite bundle on
+Node.js 24 from the frozen `pnpm-lock.yaml`, then copies **only the static output**
+into an unprivileged nginx runtime image (uid 101, port 8080). `vite preview` is not
+used in production, and the runtime image contains no Node.js, no pnpm, and no
+source.
 
-The frontend ships as a container in the root Compose stack: a multi-stage
-`frontend/Dockerfile` builds the Vite bundle on Node.js 24 (installing from the
-frozen `pnpm-lock.yaml`) and serves only the compiled static output from an
-**unprivileged nginx** runtime image (uid 101, port 8080). `vite preview` is
-**not** used in production.
-
-```bash
-# From the repository root: builds and starts postgres, api, worker and frontend
-docker compose up -d --build
-# Open the app at http://127.0.0.1:5173
-```
-
-Inside the container, nginx serves the SPA with an `index.html` fallback and
-reverse-proxies `/api/` to the Compose `api` service while preserving the
-complete URI. Because the client's default `API_BASE_URL` is empty, requests go
-to relative `/api/v1/...` paths, which nginx forwards to `http://api:3000/api/v1/...`
-on the same origin — so session cookies (`bt_session`), the CSRF header
-(`x-csrf-token`), document uploads, and streamed downloads all work without CORS.
-
-The proxy accepts request bodies up to 6 MiB (the backend default
-`UPLOAD_MAX_BYTES` is 5 MiB); raise `client_max_body_size` in
-`frontend/nginx/default.conf` if you increase the backend limit.
-
-To build the image directly:
+`frontend/nginx/default.conf` serves the SPA with an `index.html` fallback, caches
+hashed assets under `/assets/` for a year, and reverse-proxies `/api/` to the
+Compose `api` service while preserving the full URI. The proxy accepts request
+bodies up to 6 MiB, which is headroom over the backend's 5 MiB `UPLOAD_MAX_BYTES`
+default; raise `client_max_body_size` if you raise the backend limit.
 
 ```bash
+# the normal path, from the repository root
+docker compose up -d --build      # app at http://127.0.0.1:5173
+
+# or build and run the image directly
 docker build -t bhoomitrace-frontend:local ./frontend
 docker run --rm -p 127.0.0.1:5173:8080 --add-host api:127.0.0.1 bhoomitrace-frontend:local
 ```
 
----
+The direct `docker run` form needs `--add-host api:127.0.0.1` because nginx resolves
+the Compose service name `api`; on its own there is nothing to proxy to unless you
+point it at a running API.
 
-## Backend Integration & API Architecture
+## API client, proxy, and environment
 
-The frontend communicates with the BhoomiTrace Fastify backend through a standardized API client layer (`src/lib/api/`):
+All HTTP goes through the typed client in `src/lib/api/`.
 
-### Environment Configuration & Default Proxy
-
-- **Real API Default**: The real backend API is the standard development default.
-- **Vite Proxy Forwarding**: When `VITE_API_URL` is unset, the client uses relative `/api/v1` endpoints, which Vite forwards to `http://localhost:3000` via its development proxy.
-- **No Implicit Mocking**: An unset API URL does **not** silently substitute mock data or fake successful mutations. Mocks are only used when the user explicitly chooses demo mode.
-- **Optional Override**:
+**`VITE_API_URL` (or `VITE_API_BASE_URL`) — the API base, baked in at build time.**
+Leave it unset and the client uses **relative** `/api/v1/...` paths, which is the
+supported default both in the dev server and behind the containerised nginx. An
+unset value never silently substitutes mock data.
 
 ```env
-# Optional: Set an absolute URL if not using the default relative proxy
+# Optional: only if you are not using the default relative proxy
 VITE_API_URL=http://localhost:3000
 ```
 
-### Authentication & CSRF Synchronizer Token Model
+**`VITE_BACKEND_URL` — the dev-server proxy target only.** `vite.config.ts` proxies
+`/api` to `http://localhost:3000` by default; `VITE_BACKEND_URL` overrides it. This
+variable is read by the Vite server process, not by the browser bundle, and
+Playwright sets it to `E2E_API_URL`.
 
-The application adheres to the backend's strict security architecture:
+When the app is served by nginx, the proxy is `frontend/nginx/default.conf`
+(`proxy_pass http://api:3000`) and `VITE_BACKEND_URL` is irrelevant.
 
-1. **Session Management**: Authentication uses `credentials: "include"`. Fastify sets the HTTP-only `bt_session` cookie for authentication state and the client-readable `bt_csrf` cookie for CSRF token verification.
-2. **CSRF Protection**: For state-changing HTTP requests (`POST`, `PUT`, `PATCH`, `DELETE`), the client automatically attaches the `x-csrf-token` header, obtained from memory or the `bt_csrf` cookie.
-3. **Session Rehydration**: On application startup, `restoreSession()` queries `GET /api/v1/auth/me` to rehydrate the active session and role without storing sensitive tokens or passwords in `localStorage`.
-4. **Password Policy**: Form validations enforce the backend's `PASSWORD_MIN_LENGTH = 12` character policy.
+### Session and CSRF, from the UI's point of view
 
-### Real Backend Endpoints Integrated
+The UI never stores a token or a password in `localStorage`. Authentication is a
+server-side session:
 
-| Feature Area | Backend Route & Method | Request / Response Contract | Frontend Handler |
-| :--- | :--- | :--- | :--- |
-| **Authentication** | `POST /api/v1/auth/login` | Body: `{ email, password }` → Sets cookies, returns `{ user, csrfToken }` | `src/lib/api/auth.ts: login()` |
-| **Registration** | `POST /api/v1/auth/register` | Body: `{ email, displayName, password }` → Sets cookies, returns `{ user, csrfToken }` | `src/lib/api/auth.ts: register()` |
-| **Current User** | `GET /api/v1/auth/me` | Validates session cookie → Returns `PublicUser` | `src/lib/api/session.ts: restoreSession()` |
-| **Logout** | `POST /api/v1/auth/logout` | Clears cookies on server | `src/lib/api/session.ts: signOut()` |
-| **Applicant Dashboard** | Composed: `/auth/me`, `/parcels`, `/applications`, `/documents` | Loads real user filings, parcels, and attached documents | `src/lib/api/dashboard.ts: fetchApplicantDashboard()` |
-| **Parcels List & Detail** | `GET /api/v1/parcels`, `GET /api/v1/parcels/:id` | Returns `Page<Parcel>` / `Parcel` | `src/lib/api/dashboard.ts: fetchParcels(), fetchParcel()` |
-| **Parcel Lineage** | `GET /api/v1/parcels/:id/lineage` | Returns incoming/outgoing links & survey arithmetic | `src/lib/api/dashboard.ts: fetchParcel()` |
-| **Reconciliation & Rules** | `GET /api/v1/parcels/:id/reconciliation` | Returns deterministic rule outcomes and readiness status | `src/lib/api/review.ts: fetchParcelReconciliation()` |
-| **Findings** | `GET /api/v1/parcels/:id/findings` | Returns array of open discrepancy findings | `src/lib/api/review.ts: fetchParcelFindings()` |
-| **Application Submission** | `POST /api/v1/applications` + `POST /:id/transitions` | Creates draft application, then transitions to `submitted`, assigning sequence tracking number | `src/lib/api/applications.ts: submitApplication()` |
-| **Application Detail** | `GET /api/v1/applications/:id` | Returns application detail, server `today`, timeline audit trail, and the declared document checklist (`declaredDocuments`) | `src/lib/api/dashboard.ts: fetchApplication()` |
-| **Reviewer Queue** | `GET /api/v1/review/queue` | Returns `{ pendingExtractions, openFindings, totals }` | `src/lib/api/review.ts: fetchReviewQueue(), fetchAllFindings()` |
-| **Reviewer Cases** | `GET /api/v1/applications?limit=50` | Returns reviewer-visible filings mapped to review cases | `src/lib/api/review.ts: fetchReviewCases()` |
-| **Finding Decision** | `POST /api/v1/findings/:id/review` | Body: `{ action, reason, version }` → Appends audit decision | `src/lib/api/review.ts: recordFindingReview()` |
-| **Extraction Decision** | `POST /api/v1/extractions/:extractionId/review` | Body: `{ outcome, correctedValue, note, version }`. **Prototype only**: the live call is refused (`extraction_review_not_implemented`) because the prototype has no real UUID or server version | `src/lib/api/review.ts: recordReviewOutcome()` |
-| **Document Stream** | `GET /api/v1/documents/:id/file` | Streams raw PDF/image file bytes with Content-Disposition header | `src/lib/api/client.ts: apiDownload()` |
-| **Document Upload** | `POST /api/v1/documents/upload?title=...&kind=...&reference=...` | One `multipart/form-data` file part into private backend storage. Auth via `bt_session` cookie + `x-csrf-token`; server sniffs PDF/PNG/JPEG and caps at `UPLOAD_MAX_BYTES` (5 MiB) | `src/lib/api/documents.ts: uploadDocument()` |
+1. **Cookies.** Login and registration return two cookies: `bt_session`, which is
+   HTTP-only and carries the session, and `bt_csrf`, which is deliberately readable
+   by scripts. Requests are sent with `credentials: "include"`.
+2. **CSRF header.** On every state-changing request (`POST`, `PUT`, `PATCH`,
+   `DELETE`) the client attaches `x-csrf-token`, taken from memory or read back from
+   the `bt_csrf` cookie.
+3. **Rehydration.** On startup, `restoreSession()` calls `GET /api/v1/auth/me` to
+   recover the current user and role before rendering authenticated routes.
+4. **Password policy.** The forms enforce the backend's minimum length of 12
+   characters.
 
-### Client-Side Demo Fallback
+Because the composed stack serves the SPA and the API on the same origin, cookies
+and the CSRF header travel without any CORS involvement. Running the dev server
+against the API directly is cross-origin, which is exactly what
+`CORS_ALLOWED_ORIGINS` and `credentials: "include"` are for.
 
-When operating without a backend server or in explicit demo mode (via `#/demo/citizen` or `#/demo/reviewer`), the client falls back to the local demo mock data provider (`src/mocks/service.ts`), allowing full offline exploration and UI demonstration.
+### Connections and correlation
 
----
+`src/lib/api/client.ts` parses every response into a typed result or a normalized
+`ApiError` (carrying `status`, a stable `code`, and the request id), keeps an
+in-memory CSRF token, and reads the `x-request-id` response header so a user-visible
+failure can be quoted to an operator. The correlation id is always generated by the
+API; a client cannot set it.
 
-## Known backend contract gaps
+## Integration boundaries
 
-These are backend-owned changes the frontend cannot make on its own. Until they
-land, the frontend shows the honest alternative described beside each one.
+Two backend capabilities the UI would use do not exist yet. Until they do, the UI
+shows the honest alternative rather than a fabricated one. Both are backend-owned
+changes; the API contracts are described in
+[`../backend/README.md`](../backend/README.md#endpoints).
 
-### 1. Per-application document linkage (Agent 1)
+**1. Documents are not linked to an application.** The documents API returns the
+caller's documents without an `applicationId`, so nothing associates an uploaded
+file with the filing it was submitted for. The application detail screen therefore
+renders the real `declaredDocuments` checklist instead of a document list, and
+`DocumentItem.applicationId` is always `null` in live mode. Restoring document rows
+needs an optional application association on the document resource.
 
-**Problem.** `GET /api/v1/documents` returns the caller's documents but no
-`applicationId` or `parcelId`, so nothing links an uploaded file to the
-application it was submitted for. The application detail screen previously
-listed the entire document collection as if it belonged to the open
-application, which mislabels unrelated files.
-
-**Frontend behaviour today.** `fetchApplication()` no longer attaches any
-document rows, and the detail screen renders the real
-`declaredDocuments` checklist instead. `DocumentItem.applicationId` is always
-`null` in live mode.
-
-**Contract change requested.** Add an optional application association to the
-document resource and expose it in both directions:
-
-- `POST /api/v1/documents` and `POST /api/v1/documents/upload` accept an
-  optional `applicationId` query parameter (UUID, must reference an application
-  the caller can see).
-- `documentSchema` includes `applicationId: uuid | null` (and, if a document can
-  also attach to a parcel, `parcelId: uuid | null`).
-- Optionally, `GET /api/v1/applications/:id/documents` returns the documents
-  linked to that application, so the detail screen can list real files.
-
-Once `documentSchema.applicationId` exists, the frontend can populate
-`DocumentItem.applicationId`, restore document rows on the detail screen, and
-have the upload flow pass the current application id.
-
-### 2. Real extraction review (Agent 1)
-
-**Problem.** The interactive extraction-review desk needs a real extraction UUID
-and the server's current `version` for each field, plus a supported `outcome`
-vocabulary. The prototype is driven by synthetic fixtures, so none of those are
-available.
-
-**Frontend behaviour today.** The desk is reachable only in demo mode and is
-labelled as a prototype; `recordReviewOutcome()` refuses in live mode with
+**2. Extraction review has no real identifiers.** The interactive desk needs a real
+extraction UUID, the server's current `version` per field, and a supported `outcome`
+vocabulary. It is driven by synthetic fixtures, so it is reachable only in demo mode
+and is labelled a prototype; in live mode `recordReviewOutcome()` refuses with
 `extraction_review_not_implemented` rather than posting a fabricated id.
 
-**Contract change requested.** Expose the pending extraction list with
-`extractionId` (UUID) and `version` (number) per field — for example through the
-existing `GET /api/v1/review/queue` `pendingExtractions`. The review endpoint
-already accepts `outcome` of `verified`, `correction`, or `needs_review`; the
-frontend will drop the prototype's `dismissed` option when it is wired for real.
+## Frontend limitations
 
+- **No OCR and no live extraction path.** The UI displays extraction state; it does
+  not read documents. The default provider is an offline mock.
+- **The extraction-review desk is a prototype**, as described above.
+- **Demo mode is explicit.** `#/demo/citizen` and `#/demo/reviewer` fall back to the
+  local mock provider (`src/mocks/service.ts`) for offline exploration. That
+  fallback is never triggered implicitly.
+- **No account lockout UI.** Failed logins are rate limited per address by the API,
+  not locked per account.
+- **Browser end-to-end tests are not run in CI** (see the note above).
+
+## Structure
+
+```
+frontend/
+├── Dockerfile              Multi-stage build -> unprivileged nginx runtime
+├── nginx/default.conf      SPA fallback, asset caching, /api/ reverse proxy
+├── index.html              SPA host document
+├── vite.config.ts          Dev server, /api proxy target, build settings
+├── playwright.config.ts    Browser end-to-end configuration
+├── public/                 Favicon set, Bengali fonts, robots.txt, sitemap.xml
+├── src/
+│   ├── main.tsx            Browser bootstrap
+│   ├── App.tsx             Route table
+│   ├── components/         App shell, navigation, shared UI primitives
+│   ├── features/           auth, citizen, reviewer, evidence, public screens
+│   ├── hooks/              Hash routing, async data loading, per-route SEO
+│   ├── lib/api/            Typed API client (auth, documents, review, session)
+│   ├── config/             Navigation and route metadata
+│   └── mocks/              Offline demo data provider
+└── tests/                  Contract tests and Playwright e2e specs
+```
+
+## Related documentation
+
+- [`../README.md`](../README.md) — the project runbook and quickstart.
+- [`../backend/README.md`](../backend/README.md) — API contracts, database, auth,
+  uploads, audit, and the worker.
+- [`../deploy/README.md`](../deploy/README.md) — deployment, TLS, backups, and
+  monitoring.

@@ -1,10 +1,15 @@
 <div align="center">
 
-<img src="../frontend/public/favicon.svg" alt="BhoomiTrace" width="100" height="100" />
+<img src="../frontend/public/favicon.svg" alt="BhoomiTrace" width="120" height="120" />
 
 # BhoomiTrace — Backend
 
-### Node.js 24 · TypeScript (strict) · Fastify · Drizzle ORM · PostgreSQL · Zod · Vitest
+### AI-assisted land-record verification and parcel-lineage platform
+
+BhoomiTrace extracts values from land records with source links, keeps raw and
+reviewed values separate, tracks parcel lineage (split / merge / renumbering),
+reconciles areas and shares, and surfaces explainable findings with a full review
+and audit trail.
 
 **Track:** LandTech 2026 &nbsp;·&nbsp; **Challenge:** AI-assisted land-record verification
 
@@ -12,14 +17,17 @@
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-devtree.online-2ea44f?style=flat-square)](https://devtree.online/)
 [![CI](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml)
-[![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/mosabbir-maruf/BhoomiTrace/pkgs/container/bhoomitrace-backend)
+[![Backend image](https://img.shields.io/badge/image-bhoomitrace--backend-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/mosabbir-maruf/packages/container/bhoomitrace-backend)
+[![Frontend image](https://img.shields.io/badge/image-bhoomitrace--frontend-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/mosabbir-maruf/packages/container/bhoomitrace-frontend)
 [![License: MIT](https://img.shields.io/badge/License-MIT-3DA639?style=flat-square)](../LICENSE)
 
-![Node.js 24](https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)
-![Fastify 5](https://img.shields.io/badge/Fastify-5-000000?style=flat-square&logo=fastify&logoColor=white)
-![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=flat-square&logo=postgresql&logoColor=white)
-![Vitest 5](https://img.shields.io/badge/Vitest-5-6DA544?style=flat-square&logo=vitest&logoColor=white)
+[![Node.js 24](https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Fastify 5](https://img.shields.io/badge/Fastify-5-000000?style=flat-square&logo=fastify&logoColor=white)](https://fastify.dev/)
+[![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Drizzle ORM](https://img.shields.io/badge/Drizzle%20ORM-0.45-C5F74F?style=flat-square&logoColor=black)](https://orm.drizzle.team/)
+[![Zod 4](https://img.shields.io/badge/Zod-4-3E67B1?style=flat-square)](https://zod.dev/)
+[![Vitest 5](https://img.shields.io/badge/Vitest-5-6DA544?style=flat-square&logo=vitest&logoColor=white)](https://vitest.dev/)
 
 </div>
 
@@ -243,8 +251,10 @@ To use the optional host-run Vite dev server instead:
 
 1. Start the backend stack (`docker compose up -d --build`).
 2. Confirm `http://127.0.0.1:3000/health` returns `200`.
-3. Start the frontend dev server in `frontend/` on port 5173, following its own
-   instructions.
+3. Start the frontend dev server in `frontend/`, following
+   [`frontend/README.md`](../frontend/README.md). That document owns frontend
+   setup, the API client, proxy configuration, and session/CSRF behaviour from the
+   UI side.
 4. `CORS_ALLOWED_ORIGINS` already defaults to
    `http://localhost:5173,http://127.0.0.1:5173`. Add your origin if you use a
    different port.
@@ -788,77 +798,47 @@ contain the superseded sentence, so it can never overwrite an edited row.
 
 ## CI/CD and GHCR
 
-Phase 4 adds GitHub Actions workflows under `.github/workflows/`. They run on
-GitHub-hosted `ubuntu-latest` runners and do not depend on a developer's local
-Docker state or `.env` files. They trigger on pushes and pull requests that
-touch `backend/`, `frontend/`, `docker/`, `docker-compose.yml`,
-`.github/workflows/**`, `.github/scripts/**`, `.env.example`, or `README.md`.
+CI is defined in `.github/workflows/` and runs on GitHub-hosted `ubuntu-latest`
+runners. It never depends on a local Docker state or a developer's `.env`. The
+jobs that concern this package:
 
-### Workflows
+- **`typecheck-build`** — `npm ci`, `npm run typecheck`, `npm run build` (Node 24).
+- **`test`** — a `postgres:17-alpine` service container, the test database created
+  from the committed init script after checkout, seeded synthetic data, then
+  `npm test` against `TEST_DATABASE_URL`.
+- **`docker`** — `docker compose config`, a build of both images, image-hygiene
+  checks (non-root uid, no toolchain left in the runtime image, no credential
+  literal), and a Compose smoke test covering readiness, liveness, the SPA, and
+  the `/api/` proxy.
 
-- **`ci.yml`** -- backend, frontend, retention, and Docker jobs:
-  - `typecheck-build` (backend): `npm ci`, `npm run typecheck`, `npm run build`
-    (Node 24).
-  - `test` (backend): a `postgres:17-alpine` service container, a test database
-    created from the committed init script after checkout, seeded synthetic data,
-    then `npm test` against `TEST_DATABASE_URL`.
-  - `frontend`: pnpm 9 (compatible with the committed `lockfileVersion 9.0`),
-    Node 24, `pnpm install --frozen-lockfile`, `pnpm test`,
-    `pnpm exec tsc --noEmit`, and `pnpm run build`.
-  - `retention-test`: runs `.github/scripts/test-ghcr-retention.sh`, the mocked
-    GHCR retention suite.
-  - `docker`: `docker compose config`, `docker compose build` (both images),
-    image-hygiene checks for the backend and frontend images, and a Compose smoke
-    test (backend readiness and liveness, frontend serving plus SPA fallback, and
-    an asserted `/api/` proxy request reaching the backend), then
-    `docker compose down`.
-- **`publish-image.yml`** -- publishes two images on pushes to `main`, version
-  tags (`v*.*.*`), and manual dispatch, using a build matrix:
-  `ghcr.io/<owner>/bhoomitrace-backend` and
-  `ghcr.io/<owner>/bhoomitrace-frontend`. Tags: immutable full-SHA (`sha-<40>`),
-  branch, semver (`x.y.z`, `x.y`), and `latest` only on the default branch. Uses
-  `GITHUB_TOKEN` with `packages: write` scoped to the publish and retention jobs
-  only; no credentials are passed as build arguments.
-- **`ghcr-retention-report.yml`** -- manual (`workflow_dispatch`) report that
-  lists package versions and marks keep/delete candidates. It runs in dry-run
-  (report) mode unless `delete=true` is explicitly selected.
+Image publishing and tag policy, the frontend checks, the deploy configuration
+suite, and links to the published packages are documented once, in the root
+[`README.md`](../README.md#cicd-and-container-images).
 
-### GHCR retention policy
+### GHCR retention is report-only
 
-Applies to both published packages (`bhoomitrace-backend`,
-`bhoomitrace-frontend`). Implemented by `.github/scripts/ghcr-retention.sh`, run
-automatically after each publish (delete mode, keep 2) and on demand via
-`ghcr-retention-report.yml`.
+`.github/scripts/ghcr-retention.sh` lists each package version and marks it
+`keep`, `protected`, or `delete`. **It never deletes anything**, and the
+classification is the one that destructive cleanup would use:
 
-- **Always kept (never deleted):**
-  - the most recent 2 versions by creation time,
-  - the most recent 10 versions carrying a `sha-*` tag,
-  - every version carrying a semver release tag (`x.y.z` or `x.y`, optional `v`).
-- **Deleted automatically after publish:**
-  - versions that are neither in the newest 2, nor in the newest 10 SHA-tagged,
-    nor semver-tagged -- i.e. older branch-tagged or untagged images.
-- **Safety guards (fail closed):** `MODE` must be exactly `report` or `delete`;
-  `KEEP_COUNT`/`SHA_KEEP_COUNT` must be positive integers; every version's id,
-  creation time, and tag metadata is validated before any decision; a non-array
-  or non-200 API page, a malformed response, or an invalid keep set aborts with
-  zero deletions; a failed DELETE aborts the remaining deletions and returns
-  non-zero; the final count re-checks HTTP status, JSON structure, and every page
-  before printing `Retention complete`; file-fixture (`VERSIONS_FILE`) mode
-  refuses to run with `MODE=delete` and never issues an HTTP request.
-- **Manual override:** `ghcr-retention-report.yml` runs in dry-run (report) mode
-  by default; set `delete=true` to delete candidates manually.
+- **Always kept** — the newest 2 versions overall, the newest 10 versions carrying
+  a `sha-*` tag, and every version carrying a semver release tag (`x.y.z` / `x.y`).
+- **Protected** — every untagged version. An untagged package version is a
+  platform or attestation manifest that a retained tag points at, so deleting one
+  breaks `docker pull` for every tag referencing it.
 
-### Limitations
+Destructive cleanup is disabled until a manifest-aware policy exists. The guards
+fail closed: `MODE` must be exactly `report` or `delete`, the keep counts must be
+positive integers, and a malformed or non-200 API page aborts with zero deletions.
 
-- No push to EC2 or any host is performed; deployment belongs to Phase 5.
-- Because semver- and SHA-tagged versions are retained, a package may hold more
-  than 2 versions when releases exist. Exact "only 2 images" would require
-  deleting release references, which is intentionally not done (rollback safety).
-- **Package visibility** (public vs. private) is governed by GitHub package
-  settings and is not asserted here. After the **first** successful publish,
-  open the package under the repository owner's "Packages" and set the intended
-  visibility (private by default) in the GitHub UI; this one-time step cannot be
-  automated with `GITHUB_TOKEN` alone.
+`publish-image.yml` runs the helper in report mode after each publish, and
+`ghcr-retention-report.yml` runs it on demand — both with `MODE: report` pinned.
+`MODE=delete` is refused unless `RETENTION_ALLOW_DELETE=1` is also set, so a stray
+edit cannot remove a package version by accident.
+
+**Package visibility** is a GitHub package setting that CI cannot change. After the
+first successful publish, open the package under the repository owner's
+"Packages" and set the intended visibility in the GitHub UI.
 
 ## Known limitations
 

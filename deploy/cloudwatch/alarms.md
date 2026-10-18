@@ -1,4 +1,31 @@
-# Monitoring and alerting — configuration and proof
+<div align="center">
+
+<img src="../../frontend/public/favicon.svg" alt="BhoomiTrace" width="120" height="120" />
+
+# BhoomiTrace — Monitoring and alerting
+
+### AI-assisted land-record verification and parcel-lineage platform
+
+BhoomiTrace extracts values from land records with source links, keeps raw and
+reviewed values separate, tracks parcel lineage (split / merge / renumbering),
+reconciles areas and shares, and surfaces explainable findings with a full review
+and audit trail.
+
+**Track:** LandTech 2026 &nbsp;·&nbsp; **Challenge:** AI-assisted land-record verification
+
+### 🌐 [Live Demo — devtree.online](https://devtree.online/)
+
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-devtree.online-2ea44f?style=flat-square)](https://devtree.online/)
+[![CI](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml)
+[![Backend image](https://img.shields.io/badge/image-bhoomitrace--backend-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/mosabbir-maruf/packages/container/bhoomitrace-backend)
+[![Frontend image](https://img.shields.io/badge/image-bhoomitrace--frontend-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/mosabbir-maruf/packages/container/bhoomitrace-frontend)
+[![License: MIT](https://img.shields.io/badge/License-MIT-3DA639?style=flat-square)](../../LICENSE)
+
+</div>
+
+---
+
+## Configuration and proof
 
 This document contains the **exact commands** to turn on log shipping and create
 alarms, plus the steps that prove an alert actually reaches a human.
