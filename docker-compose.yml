@@ -1,4 +1,4 @@
-# BhoomiTrace local development services (database, migrations, API, worker)
+# BhoomiTrace local development services (database, migrations, API, worker, frontend)
 # Configuration defaults are safe for local development without a root .env file
 
 name: bhoomitrace
@@ -119,6 +119,34 @@ services:
       # Shared upload volume enables worker to access files uploaded via API
       - backend-uploads:/data/uploads
     stop_grace_period: 30s
+
+  # Production-style frontend: Vite build served by unprivileged nginx, which
+  # reverse-proxies /api/ to the api service on the same origin
+  frontend:
+    image: bhoomitrace-frontend:local
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      # Bind to loopback only to prevent external network exposure
+      - target: 8080
+        published: "${FRONTEND_HOST_PORT:-5173}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+        mode: ingress
+    healthcheck:
+      # Unprivileged nginx serves the SPA root; a 200 confirms the server is up
+      test:
+        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 10s
 
 volumes:
   # Persistent database storage surviving container recreation

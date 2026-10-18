@@ -18,14 +18,20 @@ review and audit trail.
 ├── backend/             Node.js 24 · TypeScript · Fastify · Drizzle · PostgreSQL
 │   ├── Dockerfile       Multi-stage image: API, worker, migration CLI
 │   └── .dockerignore    Build-context exclusions
-├── docker-compose.yml   Local stack: PostgreSQL, migrations, API, worker
+├── frontend/            React 19 · TypeScript · Vite · Tailwind CSS frontend
+│   ├── Dockerfile       Multi-stage image: Vite build served by unprivileged nginx
+│   ├── nginx/           SPA fallback + /api reverse proxy configuration
+│   └── .dockerignore    Build-context exclusions
+├── docker-compose.yml   Local stack: PostgreSQL, migrations, API, worker, frontend
 ├── docker/              Container init scripts
-└── frontend/            React 19 · TypeScript · Vite · Tailwind CSS frontend
+└── .github/             CI workflows and the GHCR retention script
 ```
 
 `frontend/` contains the React 19 web application for citizen tracking, land
-record inspection, and reviewer workflows. Build outputs and local caches are ignored.
-It is **not** part of the Compose stack and runs separately against the local API.
+record inspection, and reviewer workflows. It ships as a container in the
+Compose stack (Vite build served by unprivileged nginx, which reverse-proxies
+`/api/` to the backend on the same origin). It can also run on its own with the
+Vite dev server against the local API.
 
 ## Status
 
@@ -35,34 +41,38 @@ Development proceeds in five phases, each reviewed before the next begins.
 | ----- | ----------- | ------ |
 | 1 | Backend foundation and database | Complete |
 | 2 | Core backend functionality, security, and testing | Complete (Reliability review approved) |
-| 3 | Containerization and complete local dev environment | Complete (backend stack) |
-| 4 | GitHub Actions CI/CD and GHCR image publishing | Not started |
+| 3 | Containerization and complete local dev environment | Complete (backend + frontend stack) |
+| 4 | GitHub Actions CI/CD and GHCR image publishing | Complete (CI, image publishing, retention) |
 | 5 | EC2 deployment, monitoring, backup, and rollback | Not started |
 
 ## Running the local stack
 
-Phase 3 containerises the **backend**: PostgreSQL, a one-shot migration job, the
-API, and a separate background worker. This is the whole reproducible backend
-stack; anything that needs a host Node install (running the API or worker
-directly, and the test suite) is documented in
-[`backend/README.md`](backend/README.md).
+The Compose stack is the whole reproducible environment: PostgreSQL, a one-shot
+migration job, the API, a separate background worker, and the containerised
+frontend. Anything that needs a host Node install (running the API or worker
+directly, the test suite, and the optional Vite dev server) is documented in
+[`backend/README.md`](backend/README.md) and [`frontend/README.md`](frontend/README.md).
 
 ```bash
 # from the repository root
 cp .env.example .env          # optional: every value already has a safe local default
-docker compose up -d --build  # postgres -> migrate (one-shot) -> api + worker
+docker compose up -d --build  # postgres -> migrate (one-shot) -> api + worker + frontend
 docker compose ps
 curl -sS http://127.0.0.1:3000/health
+# open the app: http://127.0.0.1:5173
 ```
 
 | Service | Published | Notes |
 | ------- | --------- | ----- |
+| `frontend` | `http://127.0.0.1:5173` | Vite build served by nginx; proxies `/api/` to `api:3000` |
 | `api` | `http://127.0.0.1:3000` | `/health` readiness, `/health/live` liveness |
 | `postgres` | `127.0.0.1:5433` | containers reach it as `postgres:5432` |
 | `worker` | — | separate process, no HTTP surface |
 | `migrate` | — | one-shot job; must exit 0 before the API and worker start |
 
-Both published ports are bound to the loopback interface only.
+Both published ports are bound to the loopback interface only. The frontend
+publishes on `FRONTEND_HOST_PORT` (default `5173`); the API on `API_HOST_PORT`
+(default `3000`).
 
 ```bash
 docker compose logs -f api       # follow the API
@@ -75,13 +85,42 @@ rows and uploaded evidence survive a restart. **Never** run
 `docker compose down -v` and never prune volumes: that destroys the local
 database and every uploaded file.
 
-The frontend is **not** containerised in this phase. Run it separately against
-`http://127.0.0.1:3000`; `CORS_ALLOWED_ORIGINS` already allows
-`http://localhost:5173`. See [`backend/README.md`](backend/README.md) for the
-complete start, health-check, log, shutdown, and troubleshooting workflow.
+### Optional: frontend dev server
+
+For hot-reload while working on the UI, run Vite on the host instead of (or
+alongside) the containerised frontend. Vite proxies relative `/api/v1` requests
+to `http://localhost:3000`, and `CORS_ALLOWED_ORIGINS` already allows
+`http://localhost:5173`.
+
+```bash
+cd frontend
+pnpm install
+pnpm run dev        # http://localhost:5173
+```
+
+See [`backend/README.md`](backend/README.md) for the complete backend start,
+health-check, log, shutdown, and troubleshooting workflow.
+
+## Container images and CI/CD
+
+GitHub Actions (`.github/workflows/`) runs on every push and pull request that
+touches the backend, frontend, Docker, or workflow/script paths:
+
+- **`ci.yml`** — backend typecheck/build, the backend test suite against
+  PostgreSQL, frontend tests/typecheck/build, the mocked GHCR retention tests,
+  and a Compose validation + image-hygiene + end-to-end smoke job.
+- **`publish-image.yml`** — publishes both images to GHCR on pushes to `main`,
+  version tags (`v*.*.*`), and manual dispatch:
+  `ghcr.io/<owner>/bhoomitrace-backend` and
+  `ghcr.io/<owner>/bhoomitrace-frontend`. Tags: immutable full-SHA
+  (`sha-<40>`), branch, semver (`x.y.z`, `x.y`), and `latest` on the default
+  branch only. After publishing, a retention job trims each package.
+- **`ghcr-retention-report.yml`** — manual dry-run report of the keep/delete
+  decisions; it never deletes unless explicitly enabled.
 
 ## Getting started
 
 See [`backend/README.md`](backend/README.md) for backend development setup, the
 containerised stack, database migration, and test commands. See
-[`frontend/README.md`](frontend/README.md) for frontend development and API integration.
+[`frontend/README.md`](frontend/README.md) for frontend development, Docker
+usage, and API integration.

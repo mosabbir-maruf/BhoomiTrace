@@ -2,8 +2,8 @@
 # GHCR retention helper.
 #
 # Policy (explicit, bounded):
-#   - Always preserve every version carrying a valid semver release tag.
-#   - Preserve the newest 10 (SHA_KEEP_COUNT) SHA-build versions.
+#   - Always preserve every version carrying a valid semver release tag (x.y or x.y.z, optional leading v).
+#   - Preserve the newest 10 (SHA_KEEP_COUNT) versions carrying a sha-* tag.
 #   - Preserve the newest 2 (KEEP_COUNT) versions overall.
 #   - Delete only versions outside those keep sets.
 #   - Never delete a version carrying a semver release tag.
@@ -13,13 +13,18 @@
 # MODE=delete:            delete candidates with safety guards.
 #
 # Safety guards (fail closed):
+#   - MODE must be exactly 'report' or 'delete'.
 #   - KEEP_COUNT and SHA_KEEP_COUNT must be positive integers.
-#   - API errors, malformed responses, or uncertain keep-set computation abort
-#     with zero deletions.
+#   - Every version's id, created_at, and tag metadata is validated before any
+#     candidate calculation or deletion.
+#   - API errors, non-array pages, malformed responses, or uncertain keep-set
+#     computation abort with zero deletions.
 #   - never deletes when total versions <= KEEP_COUNT
 #   - never deletes a version in the keep set
+#   - a failed DELETE aborts the remaining deletions and returns non-zero
 #   - aborts if a deletion would leave fewer than KEEP_COUNT versions
-#   - logs every action and verifies the final count
+#   - verifies the final count (HTTP status, JSON structure, every page) and
+#     prints "Retention complete" only after a validated check
 set -euo pipefail
 
 MODE="${MODE:-report}"
@@ -31,6 +36,15 @@ API_BASE="${API_BASE:-https://api.github.com}"
 
 # Defaults and validation for retention counts.
 SHA_KEEP_COUNT="${SHA_KEEP_COUNT:-10}"
+
+# MODE must be exactly one of report|delete; reject anything else.
+case "$MODE" in
+  report | delete) ;;
+  *)
+    echo "ERROR: MODE must be 'report' or 'delete' (got '$MODE')" >&2
+    exit 1
+    ;;
+esac
 
 for v in "$KEEP_COUNT" "$SHA_KEEP_COUNT"; do
   if ! [[ "$v" =~ ^[1-9][0-9]*$ ]]; then
@@ -48,6 +62,12 @@ trap 'rm -rf "$tmpdir"' EXIT
 if [ -n "${VERSIONS_FILE:-}" ]; then
   if [ ! -f "$VERSIONS_FILE" ]; then
     echo "ERROR: VERSIONS_FILE not found: $VERSIONS_FILE" >&2
+    exit 1
+  fi
+  # Explicit guard: never combine delete mode with a local file fixture. This
+  # must fail before any network call, and must not depend on an unset variable.
+  if [ "$MODE" = "delete" ]; then
+    echo "ERROR: MODE=delete cannot be combined with VERSIONS_FILE test mode; refusing to delete against a file fixture (no HTTP request made)" >&2
     exit 1
   fi
   if jq -e 'type=="array"' "$VERSIONS_FILE" >/dev/null 2>&1; then
@@ -79,15 +99,15 @@ if [ "$_from_file" = "0" ]; then
   while :; do
     http=$(curl -sS -o "$tmpdir/page.json" -w '%{http_code}' \
       -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-      "${base}?per_page=100&page=${page}")
+      "${base}?per_page=100&page=${page}") || http="000"
     if [ "$http" != "200" ]; then
       echo "ERROR: GitHub API returned HTTP $http for $base (page $page)" >&2
-      cat "$tmpdir/page.json" >&2
+      cat "$tmpdir/page.json" >&2 2>/dev/null || true
       exit 1
     fi
     if ! jq -e 'type=="array"' "$tmpdir/page.json" >/dev/null 2>&1; then
-      echo "ERROR: unexpected API response (not a JSON array)" >&2
-      cat "$tmpdir/page.json" >&2
+      echo "ERROR: unexpected API response (not a JSON array) for $base (page $page)" >&2
+      cat "$tmpdir/page.json" >&2 2>/dev/null || true
       exit 1
     fi
     n=$(jq 'length' "$tmpdir/page.json")
@@ -106,9 +126,39 @@ if [ "$_from_file" = "0" ]; then
 fi
 
 # No versions found (file mode with empty array).
-if [ "$(jq 'length' "$tmpdir/versions.json")" = "0" ]; then
+if [ "$(jq 'length' "$tmpdir/versions.json" 2>/dev/null || echo 0)" = "0" ]; then
   echo "No versions found for ghcr.io/$owner_lc/$PACKAGE (package may not exist yet)."
   exit 0
+fi
+
+# Validate every version's id, created_at, and tag metadata BEFORE calculating
+# candidates or deleting anything. Any invalid record aborts (fail closed):
+#   - id must be a positive integer
+#   - created_at must be a complete, real ISO-8601 UTC timestamp ("...Z"); the
+#     regex is fully anchored and a parse/reformat round-trip rejects months,
+#     days, and times that normalise to a different instant
+#   - metadata must be an object with an object "container" carrying a "tags"
+#     array of strings (an explicitly empty array is valid)
+# Missing/null metadata, container, or tags is invalid, so a version can never
+# silently become an untagged deletion candidate and be dropped by mistake.
+if ! jq -e '
+  def valid_version:
+    try (
+      (type == "object")
+      and ((.id | type) == "number") and (.id > 0) and (((.id | floor)) == .id)
+      and ((.created_at | type) == "string")
+      and (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+      and ((.created_at | fromdateiso8601 | gmtime | strftime("%Y-%m-%dT%H:%M:%SZ")) == .created_at)
+      and ((.metadata | type) == "object")
+      and ((.metadata.container | type) == "object")
+      and (.metadata.container | has("tags"))
+      and ((.metadata.container.tags | type) == "array")
+      and (all(.metadata.container.tags[]; type == "string"))
+    ) catch false;
+  type == "array" and all(.[]; valid_version)
+' "$tmpdir/versions.json" >/dev/null 2>&1; then
+  echo "ERROR: one or more versions have an invalid id, created_at, or tag metadata; aborting before any deletion (fail closed)" >&2
+  exit 1
 fi
 
 total=$(jq 'length' "$tmpdir/versions.json")
@@ -190,8 +240,10 @@ fi
 # --- deletion ---
 echo "MODE=delete: deleting candidates..."
 deleted=0
+del_failed=0
 while IFS= read -r id; do
   [ -z "$id" ] && continue
+  # Recheck against the keep set immediately before deleting.
   if grep -qx "$id" "$tmpdir/keep_ids.txt"; then
     echo "  skip (keep set): $id"
     continue
@@ -203,33 +255,49 @@ while IFS= read -r id; do
     break
   fi
   echo "  deleting version $id ..."
-  http=$(curl -sS -o /tmp/del.out -w "%{http_code}" -X DELETE \
+  http=$(curl -sS -o "$tmpdir/del.out" -w "%{http_code}" -X DELETE \
     -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-    "$base/$id")
+    "$base/$id") || http="000"
   if [ "$http" = "204" ] || [ "$http" = "200" ]; then
     deleted=$((deleted + 1))
     echo "    -> deleted (HTTP $http)"
   else
-    echo "    -> FAILED (HTTP $http): $(cat /tmp/del.out)"
+    echo "    -> FAILED (HTTP $http): $(cat "$tmpdir/del.out" 2>/dev/null || true)" >&2
+    del_failed=1
+    break
   fi
 done < "$tmpdir/candidates.txt"
+
+if [ "$del_failed" = "1" ]; then
+  echo "ERROR: a DELETE request failed; aborting remaining deletions (fail closed)" >&2
+  exit 1
+fi
 
 echo
 echo "Deleted $deleted version(s)."
 
-# Verify final count.
+# Verify final count: every page must return HTTP 200 and a JSON array.
 page=1; final=0
 while :; do
-  resp=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-    "${base}?per_page=100&page=${page}")
-  n=$(printf '%s' "$resp" | jq 'if type=="array" then length else 0 end')
-  if [ "$n" = "0" ] || [ "$n" = "null" ]; then break; fi
+  final_http=$(curl -sS -o "$tmpdir/final.json" -w '%{http_code}' \
+    -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+    "${base}?per_page=100&page=${page}") || final_http="000"
+  if [ "$final_http" != "200" ]; then
+    echo "ERROR: final-count check returned HTTP $final_http (page $page); cannot confirm retention" >&2
+    exit 1
+  fi
+  if ! jq -e 'type=="array"' "$tmpdir/final.json" >/dev/null 2>&1; then
+    echo "ERROR: final-count check returned a malformed (non-array) response (page $page)" >&2
+    exit 1
+  fi
+  n=$(jq 'length' "$tmpdir/final.json")
+  if [ "$n" = "0" ]; then break; fi
   final=$((final + n))
   page=$((page + 1))
 done
 echo "Versions remaining: $final"
 if [ "$final" -lt "$KEEP_COUNT" ]; then
-  echo "WARNING: fewer than $KEEP_COUNT versions remain!" >&2
+  echo "ERROR: fewer than $KEEP_COUNT versions remain after deletion; retention failed" >&2
   exit 1
 fi
 echo "Retention complete."

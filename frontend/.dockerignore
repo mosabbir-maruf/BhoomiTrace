@@ -1,0 +1,47 @@
+# Build-context exclusions; keeps sources, tests, caches, and secrets out of the image
+
+# Installed dependencies and build output
+node_modules
+dist
+build
+coverage
+*.tsbuildinfo
+
+# Local environment and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Docker build files
+Dockerfile
+.dockerignore
+
+# Tests and developer tooling
+tests
+.mise.toml
+
+# Documentation
+*.md
+
+# Version-control and package-manager caches
+.git
+.gitignore
+.gitattributes
+.pnpm-store
+
+# Private agent instructions, skills, and session metadata
+CLAUDE.md
+AGENTS.md
+agentm.md
+agentmd.md
+*.agent.md
+.claude
+.agents
+.agent
+.cursor
+.gemini
+.codex
+skills
+skills-lock.json
+*.log
