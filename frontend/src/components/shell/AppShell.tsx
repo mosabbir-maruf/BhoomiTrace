@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
   citizenNav,
   reviewerNav,
+  routeSeoTitle,
   routeTitle,
   type RouteId,
 } from "@/config/navigation"
@@ -44,7 +45,7 @@ export default function AppShell({
 
   // On client-side navigation, update the title and move focus to the new page.
   useEffect(() => {
-    document.title = `${routeTitle(route)} | BhoomiTrace`
+    document.title = routeSeoTitle(route)
     if (isFirstRender.current) {
       isFirstRender.current = false
       return

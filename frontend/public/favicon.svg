@@ -1,1 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="4" fill="#18212b"/><path d="M7 22 11.5 8.5 23 10.5 25.5 21 15 25.5Z" fill="#8fc9ae" stroke="#f3f4ef" stroke-width="1.5" stroke-linejoin="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="btBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f3427" />
+      <stop offset="100%" stop-color="#1e5a47" />
+    </linearGradient>
+    <linearGradient id="btDot" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#f59e0b" />
+    </linearGradient>
+    <filter id="subtleGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#000" flood-opacity="0.3" />
+    </filter>
+  </defs>
+
+  <!-- Background Squircle -->
+  <rect width="64" height="64" rx="15" fill="url(#btBg)" />
+
+  <!-- Cadastral Parcel Outline (Subtle watermark) -->
+  <path d="M11 48 L22 13 L52 18 L46 51 Z" 
+        fill="none" 
+        stroke="#ffffff" 
+        stroke-width="1.6" 
+        stroke-opacity="0.22" 
+        stroke-linejoin="round" />
+
+  <!-- Survey Waypoint Pin / Dot -->
+  <circle cx="52" cy="18" r="3.2" fill="url(#btDot)" filter="url(#subtleGlow)" />
+
+  <!-- Lettermark Group with crisp typography -->
+  <g filter="url(#subtleGlow)">
+    <!-- Letter B (Crisp White) -->
+    <path d="M13.5 18 H25 C29.8 18 33.2 20.6 33.2 25 C33.2 28.1 31.4 30.1 28.3 31 C32.3 31.8 34.5 34.8 34.5 39 C34.5 44.2 30.1 47 25 47 H13.5 Z M20 23.5 V29 H24.8 C27 29 28.2 27.9 28.2 26.3 C28.2 24.6 27 23.5 24.8 23.5 Z M20 34.5 V41.5 H25.2 C27.7 41.5 29.4 40.4 29.4 38 C29.4 35.8 27.7 34.5 25.2 34.5 Z" fill="#ffffff" />
+    
+    <!-- Letter T (Vibrant Mint / Land-Trace Emerald) -->
+    <path d="M35.5 23 H49.5 V28.5 H45.2 V47 H39.8 V28.5 H35.5 Z" fill="#6ee7b7" />
+  </g>
+</svg>

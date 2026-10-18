@@ -10,6 +10,7 @@ import {
   type RouteId,
 } from "@/config/navigation"
 import { navigate, useRoute } from "@/hooks/useHashRoute"
+import { usePageSeo } from "@/hooks/usePageSeo"
 import { restoreSession, startDemo, useSession } from "@/lib/api/session"
 import { reviewCases } from "@/mocks/evidence"
 import LandingPage from "@/features/public/LandingPage"
@@ -141,6 +142,7 @@ function NotFound() {
 
 export default function App() {
   const route = useRoute()
+  usePageSeo(route)
   const session = useSession()
   const [checkingAuth, setCheckingAuth] = useState(!session)
   const def = routes[route.id]

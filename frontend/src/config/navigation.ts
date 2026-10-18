@@ -15,99 +15,183 @@ interface RouteDef {
   audience: Audience
   /** Breadcrumb parent route ID. */
   parent?: string
+  /** Search-engine-optimized full page title override. */
+  seoTitle?: string
+  /** Search engine meta description. */
+  description?: string
 }
 
 export const routes = {
-  landing: { path: "", title: "BhoomiTrace", audience: "public" },
-  login: { path: "login", title: "লগইন", audience: "public" },
-  register: { path: "register", title: "নতুন অ্যাকাউন্ট", audience: "public" },
+  landing: {
+    path: "",
+    title: "BhoomiTrace",
+    seoTitle: "BhoomiTrace — ভূমিট্রেস | ভূমি রেকর্ড যাচাই, খতিয়ান ও আবেদন ট্র্যাকিং",
+    description: "BhoomiTrace (ভূমিট্রেস): পুরোনো ভূমি নথির খতিয়ান, দাগ ও মৌজা রেকর্ড মিলিয়ে দেখার এবং আবেদন ট্র্যাকিং করার আধুনিক ডিজিটাল প্রোটোটাইপ প্ল্যাটফর্ম।",
+    audience: "public",
+  },
+  login: {
+    path: "login",
+    title: "লগইন",
+    seoTitle: "লগইন | BhoomiTrace — ভূমি রেকর্ড ও আবেদন ট্র্যাকিং",
+    description: "BhoomiTrace পোর্টালে আপনার অ্যাকাউন্টে লগইন করুন এবং খতিয়ান, দাগ ও ভূমি আবেদন ট্র্যাক করুন।",
+    audience: "public",
+  },
+  register: {
+    path: "register",
+    title: "নতুন অ্যাকাউন্ট",
+    seoTitle: "নতুন অ্যাকাউন্ট নিবন্ধন | BhoomiTrace",
+    description: "BhoomiTrace-এ নতুন নাগরিক বা নিরীক্ষক অ্যাকাউন্ট তৈরি করুন। দ্রুত ও সহজে জমি রেকর্ড যাচাই সেবা নিন।",
+    audience: "public",
+  },
   "forgot-password": {
     path: "forgot-password",
     title: "পাসওয়ার্ড পুনরুদ্ধার",
+    seoTitle: "পাসওয়ার্ড পুনরুদ্ধার | BhoomiTrace",
+    description: "আপনার BhoomiTrace অ্যাকাউন্টের পাসওয়ার্ড সহজে পুনরুদ্ধার বা রিসেট করুন।",
     audience: "public",
   },
-  enter: { path: "demo/:id", title: "ডেমোতে প্রবেশ", audience: "public" },
+  enter: {
+    path: "demo/:id",
+    title: "ডেমোতে প্রবেশ",
+    seoTitle: "লাইভ ডেমো পরিবেশ | BhoomiTrace",
+    description: "নাগরিক এবং পর্যালোচক হিসেবে BhoomiTrace-এর কার্যপ্রণালীর সরাসরি ডেমো ইন্টারফেস অভিজ্ঞতা নিন।",
+    audience: "public",
+  },
 
-  dashboard: { path: "dashboard", title: "আমার ড্যাশবোর্ড", audience: "citizen" },
+  dashboard: {
+    path: "dashboard",
+    title: "আমার ড্যাশবোর্ড",
+    seoTitle: "নাগরিক ড্যাশবোর্ড | BhoomiTrace",
+    description: "আপনার সাম্প্রতিক ভূমি আবেদন, নথিপত্র এবং রেকর্ড স্ট্যাটাস একনজরে পর্যালোচনা করুন।",
+    audience: "citizen",
+  },
   applications: {
     path: "applications",
     title: "আমার আবেদন",
+    seoTitle: "আমার ভূমি আবেদনসমূহ | BhoomiTrace",
+    description: "জমি জমা ও রেকর্ড সংশোধন সংক্রান্ত আপনার সকল চলমান এবং সম্পন্ন আবেদনের বিস্তারিত তালিকা।",
     audience: "citizen",
     parent: "dashboard",
   },
   application: {
     path: "applications/:id",
     title: "আবেদনের বিস্তারিত",
+    seoTitle: "আবেদনের বিস্তারিত তথ্য ও অগ্রগতি | BhoomiTrace",
+    description: "নির্দিষ্ট ভূমি আবেদনের বর্তমান স্ট্যাটাস, প্রয়োজনীয় নথিপত্র এবং নিরীক্ষকের পর্যালোচনার ফলাফল।",
     audience: "citizen",
     parent: "applications",
   },
   "new-application": {
     path: "new-application",
     title: "নতুন আবেদন",
+    seoTitle: "নতুন ভূমি আবেদন দাখিল | BhoomiTrace",
+    description: "খতিয়ান সংশোধন, রেকর্ড যাচাই বা শুনানির জন্য সহজ ৪ ধাপে নতুন আবেদন সম্পন্ন করুন।",
     audience: "citizen",
     parent: "applications",
   },
   "continue-application": {
     path: "new-application/:id",
     title: "খসড়া আবেদন",
+    seoTitle: "সংরক্ষিত খসড়া আবেদন সম্পাদনা | BhoomiTrace",
+    description: "পূর্বে সংরক্ষিত খসড়া ভূমি আবেদন পর্যালোচনা ও পরবর্তী ধাপে দাখিল করুন।",
     audience: "citizen",
     parent: "applications",
   },
   records: {
     path: "records",
     title: "জমির রেকর্ড",
+    seoTitle: "জমির রেকর্ড অনুসন্ধান ও তালিকা | BhoomiTrace",
+    description: "মৌজা, খতিয়ান ও দাগ নম্বর দিয়ে আরএস, সিএস ও বিএস জরিপ রেকর্ড মিলিয়ে দেখুন ও বিশ্লেষণ করুন।",
     audience: "citizen",
     parent: "dashboard",
   },
   record: {
     path: "records/:id",
     title: "রেকর্ডের বিস্তারিত",
+    seoTitle: "জমির রেকর্ডের পুঙ্খানুপুঙ্খ তথ্য | BhoomiTrace",
+    description: "নির্বাচিত দাগ ও খতিয়ানের বিস্তারিত জরিপ তথ্য, মালিকানা বিবরণ এবং উৎসের প্রমাণ।",
     audience: "citizen",
     parent: "records",
   },
   documents: {
     path: "documents",
     title: "নথিপত্র",
+    seoTitle: "ভূমি নথিপত্র ও দলিলের ডিজিটাল সংগ্রহ | BhoomiTrace",
+    description: "আপনার সংরক্ষিত দলিলের স্ক্যান কপি, পরচা ও সরকারি রেকর্ডের নিরাপদ ডিজিটাল সংরক্ষণাগার।",
     audience: "citizen",
     parent: "dashboard",
   },
   document: {
     path: "documents/:id",
     title: "নথির বিস্তারিত",
+    seoTitle: "নথির বিস্তারিত ও প্রমাণ ম্যাপিং | BhoomiTrace",
+    description: "নথির স্ক্যান পাতা থেকে সরাসরি এক্সট্র্যাক্ট করা খতিয়ান ও দাগ তথ্যের ভিজ্যুয়াল ম্যাপিং।",
     audience: "citizen",
     parent: "documents",
   },
 
-  help: { path: "help", title: "সহায়তা", audience: "signed-in" },
-  profile: { path: "profile", title: "আমার প্রোফাইল", audience: "signed-in" },
+  help: {
+    path: "help",
+    title: "সহায়তা",
+    seoTitle: "সহায়তা ও সাধারণ নির্দেশিকা (FAQ) | BhoomiTrace",
+    description: "খতিয়ান, দাগ, মৌজার অর্থ বুঝুন এবং প্ল্যাটফর্ম ব্যবহারের প্রশ্নোত্তরের সহায়তা পান।",
+    audience: "signed-in",
+  },
+  profile: {
+    path: "profile",
+    title: "আমার প্রোফাইল",
+    seoTitle: "ব্যবহারকারী প্রোফাইল ও সেটিংস | BhoomiTrace",
+    description: "আপনার ব্যক্তিগত তথ্য, মোবাইল নম্বর এবং অ্যাকাউন্টের নিরাপত্তা সেটিংস পরিচালনা করুন।",
+    audience: "signed-in",
+  },
 
-  queue: { path: "reviewer", title: "পর্যালোচনার তালিকা", audience: "reviewer" },
+  queue: {
+    path: "reviewer",
+    title: "পর্যালোচনার তালিকা",
+    seoTitle: "পর্যালোচনার তালিকা (Reviewer Queue) | BhoomiTrace",
+    description: "যাচাইকারী কর্মকর্তার পর্যালোচনার অপেক্ষায় থাকা আবেদন ও নথিপত্রের তালিকা।",
+    audience: "reviewer",
+  },
   desk: {
     path: "reviewer/cases",
     title: "নথি যাচাই",
+    seoTitle: "নথি যাচাই ও নিরীক্ষা ডেস্ক | BhoomiTrace",
+    description: "মূল নথির সাথে এক্সট্র্যাক্ট করা তথ্যের তুলনা এবং নির্ভুল নিরীক্ষা সিদ্ধান্ত প্রদান।",
     audience: "reviewer",
     parent: "queue",
   },
   case: {
     path: "reviewer/cases/:id",
     title: "নথি যাচাই",
+    seoTitle: "নথি নিরীক্ষা কেস বিবরণ | BhoomiTrace",
+    description: "নির্দিষ্ট মামলার নথি ও তথ্যের পুঙ্খানুপুঙ্খ এভিডেন্স যাচাই।",
     audience: "reviewer",
     parent: "queue",
   },
   compare: {
     path: "reviewer/compare",
     title: "রেকর্ড মিলিয়ে দেখা",
+    seoTitle: "বিভিন্ন জরিপের রেকর্ড তুলনা (Compare) | BhoomiTrace",
+    description: "সিএস, আরএস ও বিএস খতিয়ানের তথ্যের গরমিল এবং দাগের তারতম্য পাশাপাশি মিলিয়ে দেখুন।",
     audience: "reviewer",
     parent: "queue",
   },
   lineage: {
     path: "reviewer/lineage",
     title: "রেকর্ডের ইতিহাস",
+    seoTitle: "জমির রেকর্ডের ইতিহাস ও বংশপরম্পরা (Lineage) | BhoomiTrace",
+    description: "জমির মালিকানা হস্তান্তর, খতিয়ানের পরিবর্তন ও ঐতিহাসিক জরিপের বংশপরম্পরা গ্রাফ।",
     audience: "reviewer",
     parent: "queue",
   },
 
-  "not-found": { path: "404", title: "পাতা পাওয়া যায়নি", audience: "public" },
+  "not-found": {
+    path: "404",
+    title: "পাতা পাওয়া যায়নি",
+    seoTitle: "পাতা পাওয়া যায়নি (404) | BhoomiTrace",
+    description: "অনুরোধকৃত পাতাটি পাওয়া যায়নি। অনুগ্রহ করে সঠিক লিংক ব্যবহার করুন বা মূল পাতায় ফিরে যান।",
+    audience: "public",
+  },
 } as const satisfies Record<string, RouteDef>
 
 export type RouteId = keyof typeof routes
@@ -159,6 +243,17 @@ export function routeHref(
 
 export function routeTitle(id: RouteId): string {
   return routes[id].title
+}
+
+export function routeSeoTitle(id: RouteId): string {
+  return routes[id].seoTitle ?? `${routes[id].title} | BhoomiTrace`
+}
+
+export function routeDescription(id: RouteId): string {
+  return (
+    routes[id].description ??
+    "BhoomiTrace: পুরোনো ভূমি নথির খতিয়ান, দাগ ও মৌজা রেকর্ড মিলিয়ে দেখার আধুনিক ডিজিটাল প্ল্যাটফর্ম প্রোটোটাইপ।"
+  )
 }
 
 /** Breadcrumb ancestors (without the current page). */
