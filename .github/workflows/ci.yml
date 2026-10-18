@@ -166,7 +166,7 @@ jobs:
         run: pnpm run build
 
   retention-test:
-    name: GHCR retention mocked tests
+    name: GHCR retention and publish-workflow tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -175,6 +175,9 @@ jobs:
 
       - name: Run mocked retention tests
         run: bash .github/scripts/test-ghcr-retention.sh
+
+      - name: Validate image publishing and retention safety
+        run: bash .github/scripts/test-publish-workflow.sh
 
   deploy-tests:
     name: Production deploy configuration and script tests

@@ -5,15 +5,24 @@
 #   - Always preserve every version carrying a valid semver release tag (x.y or x.y.z, optional leading v).
 #   - Preserve the newest 10 (SHA_KEEP_COUNT) versions carrying a sha-* tag.
 #   - Preserve the newest 2 (KEEP_COUNT) versions overall.
-#   - Delete only versions outside those keep sets.
-#   - Never delete a version carrying a semver release tag.
+#   - NEVER delete an untagged version. For a container package, an untagged
+#     version is a platform manifest or an attestation manifest referenced by a
+#     retained multi-arch image index. Deleting one corrupts every tag that
+#     references it: `docker pull <tag>` then fails with
+#     "failed to open .../manifests/sha256:... not found". Only versions that
+#     carry at least one tag and fall outside the keep sets are candidates.
 #   - A version may carry multiple tags and is evaluated as one package version.
 #
-# MODE=report  (default): list versions and mark keep/delete candidates. Never deletes.
-# MODE=delete:            delete candidates with safety guards.
+# MODE=report  (default): list versions and mark keep/protected/delete candidates.
+#                         Never deletes.
+# MODE=delete:            delete candidates with safety guards. Destructive
+#                         deletion is disabled unless RETENTION_ALLOW_DELETE=1 is
+#                         set deliberately; see the opt-in guard below.
 #
 # Safety guards (fail closed):
 #   - MODE must be exactly 'report' or 'delete'.
+#   - MODE=delete is refused unless RETENTION_ALLOW_DELETE=1, so a stray
+#     MODE=delete in a workflow cannot delete anything by accident.
 #   - KEEP_COUNT and SHA_KEEP_COUNT must be positive integers.
 #   - Every version's id, created_at, and tag metadata is validated before any
 #     candidate calculation or deletion.
@@ -21,6 +30,7 @@
 #     computation abort with zero deletions.
 #   - never deletes when total versions <= KEEP_COUNT
 #   - never deletes a version in the keep set
+#   - never deletes an untagged version (protects referenced manifests/attestations)
 #   - a failed DELETE aborts the remaining deletions and returns non-zero
 #   - aborts if a deletion would leave fewer than KEEP_COUNT versions
 #   - verifies the final count (HTTP status, JSON structure, every page) and
@@ -52,6 +62,15 @@ for v in "$KEEP_COUNT" "$SHA_KEEP_COUNT"; do
     exit 1
   fi
 done
+
+# Destructive deletion is disabled by default. Turning it on requires an explicit,
+# deliberate acknowledgement in addition to MODE=delete, so that a stray
+# MODE=delete (for example from a future workflow edit) can never delete a
+# published manifest on its own. This is intentionally a hard, fail-closed gate.
+if [ "$MODE" = "delete" ] && [ "${RETENTION_ALLOW_DELETE:-0}" != "1" ]; then
+  echo "ERROR: destructive retention cleanup is disabled; refusing to run MODE=delete without RETENTION_ALLOW_DELETE=1" >&2
+  exit 1
+fi
 
 owner_lc=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
 
@@ -195,8 +214,32 @@ fi
 
 jq -r '.[]' "$tmpdir/keep_ids.json" > "$tmpdir/keep_ids.txt"
 
+# Protected set: every untagged version. In a container package these are the
+# platform/configuration manifests and the buildx attestation manifests that a
+# retained image index references by digest. They are never deletion candidates,
+# because deleting one leaves the referencing tag pointing at a missing manifest
+# and breaks `docker pull` for that tag.
+jq '[ .[] | select((.metadata.container.tags // []) | length == 0) | .id ]' \
+  "$tmpdir/sorted.json" > "$tmpdir/protected_ids.json"
+
+# Fail closed: the protected set must be an array of numbers (an empty array is valid).
+if ! jq -e 'type=="array" and all(.[]; type=="number")' "$tmpdir/protected_ids.json" >/dev/null 2>&1; then
+  echo "ERROR: protected-set computation produced an invalid result; aborting (fail closed)" >&2
+  exit 1
+fi
+
+jq -r '.[]' "$tmpdir/protected_ids.json" > "$tmpdir/protected_ids.txt"
+
 echo "Keep set (ids):"
 cat "$tmpdir/keep_ids.txt" | sed 's/^/  /'
+echo
+
+echo "Protected set (untagged versions referenced by retained tags):"
+if [ -s "$tmpdir/protected_ids.txt" ]; then
+  cat "$tmpdir/protected_ids.txt" | sed 's/^/  /'
+else
+  echo "  <none>"
+fi
 echo
 
 # Safety: never go below KEEP_COUNT versions total.
@@ -205,9 +248,10 @@ if [ "$total" -le "$KEEP_COUNT" ]; then
   exit 0
 fi
 
-# Candidates = versions not in keep set.
+# Candidates = versions that are neither in the keep set nor in the protected
+# set. Only tagged versions can be candidates; every untagged version is protected.
 jq -r '.[].id' "$tmpdir/sorted.json" | while read -r id; do
-  if ! grep -qx "$id" "$tmpdir/keep_ids.txt"; then
+  if ! grep -qx "$id" "$tmpdir/keep_ids.txt" && ! grep -qx "$id" "$tmpdir/protected_ids.txt"; then
     echo "$id"
   fi
 done > "$tmpdir/candidates.txt"
@@ -225,6 +269,8 @@ while IFS= read -r id; do
   created=$(jq -r --argjson id "$id" '.[] | select(.id==$id) | .created_at' "$tmpdir/sorted.json")
   if grep -qx "$id" "$tmpdir/keep_ids.txt"; then
     printf '%-12s %-40s %-22s %s\n' "$id" "${tags:-<none>}" "$created" "KEEP"
+  elif grep -qx "$id" "$tmpdir/protected_ids.txt"; then
+    printf '%-12s %-40s %-22s %s\n' "$id" "${tags:-<none>}" "$created" "PROTECTED"
   else
     printf '%-12s %-40s %-22s %s\n' "$id" "${tags:-<none>}" "$created" "CANDIDATE"
   fi
@@ -247,6 +293,20 @@ while IFS= read -r id; do
   if grep -qx "$id" "$tmpdir/keep_ids.txt"; then
     echo "  skip (keep set): $id"
     continue
+  fi
+  # Recheck against the protected set: an untagged version is a manifest or
+  # attestation referenced by a retained tag and must never be deleted.
+  if grep -qx "$id" "$tmpdir/protected_ids.txt"; then
+    echo "  skip (protected untagged version): $id"
+    continue
+  fi
+  # Hard guard: never DELETE a version with an empty tag list even if it somehow
+  # reached the candidate list.
+  tags_len=$(jq -r --argjson id "$id" '.[] | select(.id==$id) | (.metadata.container.tags // []) | length' "$tmpdir/sorted.json")
+  if [ "$tags_len" = "0" ]; then
+    echo "ERROR: refusing to delete untagged version $id; it may be a manifest/attestation referenced by a retained tag" >&2
+    del_failed=1
+    break
   fi
   # safety: would deletion leave fewer than KEEP_COUNT?
   remaining=$(( total - deleted ))

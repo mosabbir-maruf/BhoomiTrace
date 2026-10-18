@@ -15,24 +15,20 @@ on:
         description: 'Newest SHA-tagged versions to keep (policy: 10)'
         required: false
         default: '10'
-      delete:
-        description: 'Delete candidates (false = dry-run report only)'
-        required: false
-        default: 'false'
-        type: choice
-        options: ['false', 'true']
 
 permissions:
   contents: read
-  packages: write
+  packages: read
 
 jobs:
   report:
-    name: Retention report (delete only if explicitly enabled)
+    name: Retention report (report only, never deletes)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      MODE: ${{ inputs.delete == 'true' && 'delete' || 'report' }}
+      # Always report-only. Destructive cleanup is disabled until a
+      # manifest-aware retention policy exists; see .github/scripts/ghcr-retention.sh.
+      MODE: report
       KEEP_COUNT: ${{ inputs.keep_count }}
       SHA_KEEP_COUNT: ${{ inputs.sha_keep_count }}
       OWNER: ${{ github.repository_owner }}
