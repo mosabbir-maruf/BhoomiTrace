@@ -4,9 +4,12 @@ import type {
   ActionItemKind,
   CaseStatus,
   DocumentStatus,
+  ExtractionField,
+  ExtractionReviewStatus,
   FindingKind,
   FindingSeverity,
   FindingStatus,
+  ProcessingJobStatus,
 } from "./api/types"
 import type { IconName } from "@/components/ui/Icon"
 
@@ -140,4 +143,45 @@ export const findingKindLabel: Record<FindingKind, string> = {
   ownership_gap: "মালিকানার তথ্যে ফাঁক",
   document_required: "অতিরিক্ত নথি প্রয়োজন",
   other: "অন্যান্য পর্যবেক্ষণ",
+}
+
+/** The six extraction fields, named the way the rest of the app names them. */
+export const extractionFieldLabel: Record<ExtractionField, string> = {
+  khatian: "খতিয়ান নম্বর",
+  mouza: "মৌজা",
+  dag: "দাগ নম্বর",
+  area: "জমির পরিমাণ",
+  share: "অংশ",
+  owner: "মালিকের নাম",
+}
+
+/**
+ * What each review state means for one read value.
+ *
+ * `pending` is not a failure: an untouched reading is waiting for a person, and
+ * saying so is the point of keeping `recordedValue` and `reviewedValue` apart.
+ */
+export const extractionReviewMeta: Record<ExtractionReviewStatus, StatusMeta> = {
+  pending: { label: "মানব পর্যালোচনার অপেক্ষায়", tone: "info", icon: "clock" },
+  confirmed: { label: "মানুষ যাচাই করেছেন", tone: "success", icon: "check" },
+  corrected: { label: "মানুষ সংশোধন করেছেন", tone: "warning", icon: "pencil" },
+  unclear: { label: "অস্পষ্ট", tone: "warning", icon: "alert" },
+}
+
+/**
+ * What each extraction job state means to the citizen watching it.
+ *
+ * `queued`, `processing` and `retry_pending` are all "still running": none of
+ * them is a result, so none of them may be shown as one. `failed` and
+ * `cancelled` say the attempt produced nothing, which is why the page offers a
+ * fresh attempt instead of an empty table.
+ */
+export const extractionJobStatusMeta: Record<ProcessingJobStatus, StatusMeta> = {
+  queued: { label: "একটির পরে একটি অপেক্ষায়", tone: "info", icon: "clock" },
+  processing: { label: "AI নথিটি পড়ছে", tone: "info", icon: "clock" },
+  retry_pending: { label: "আবার চেষ্টার অপেক্ষায়", tone: "warning", icon: "refresh" },
+  completed: { label: "পাঠ শেষ হয়েছে", tone: "success", icon: "check" },
+  review_required: { label: "মানব পর্যালোচনা দরকার", tone: "warning", icon: "alert" },
+  failed: { label: "পাঠটি ব্যর্থ হয়েছে", tone: "danger", icon: "xCircle" },
+  cancelled: { label: "পাঠটি বাতিল হয়েছে", tone: "neutral", icon: "close" },
 }

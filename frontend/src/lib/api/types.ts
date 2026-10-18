@@ -267,6 +267,48 @@ export interface Extraction {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Processing jobs                                                            */
+/* -------------------------------------------------------------------------- */
+
+export type ProcessingJobKind =
+  | "document_extraction"
+  | "parcel_reconciliation"
+  | "readiness_report"
+
+/** `completed` and `review_required` are the terminal states that keep a result. */
+export type ProcessingJobStatus =
+  | "queued"
+  | "processing"
+  | "retry_pending"
+  | "review_required"
+  | "completed"
+  | "failed"
+  | "cancelled"
+
+export interface ProcessingJob {
+  id: string
+  kind: ProcessingJobKind
+  status: ProcessingJobStatus
+  parcelId: string | null
+  sourceDocumentId: string | null
+  requestedBy: string | null
+  idempotencyKey: string | null
+  attemptCount: number
+  maxAttempts: number
+  availableAt: string
+  leasedUntil: string | null
+  lockedBy: string | null
+  lastError: string | null
+  payload: Record<string, unknown> | null
+  /** Written by the worker. An extraction job stores `extractionIds` here. */
+  result: Record<string, unknown> | null
+  startedAt: string | null
+  finishedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/* -------------------------------------------------------------------------- */
 /* Findings & Review Decisions                                                */
 /* -------------------------------------------------------------------------- */
 
