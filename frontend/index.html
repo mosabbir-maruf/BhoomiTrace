@@ -1,13 +1,126 @@
 <!doctype html>
-<html lang="bn">
+<html lang="bn" dir="ltr">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+
+    <!-- Primary Meta Tags -->
+    <title>BhoomiTrace — ভূমিট্রেস | ভূমি রেকর্ড যাচাই, খতিয়ান ও আবেদন ট্র্যাকিং</title>
+    <meta name="title" content="BhoomiTrace — ভূমিট্রেস | ভূমি রেকর্ড যাচাই, খতিয়ান ও আবেদন ট্র্যাকিং" />
+    <meta
+      name="description"
+      content="BhoomiTrace (ভূমিট্রেস): পুরোনো ভূমি নথির খতিয়ান, দাগ ও মৌজা রেকর্ড মিলিয়ে দেখার এবং আবেদন ট্র্যাকিং করার আধুনিক ডিজিটাল প্রোটোটাইপ প্ল্যাটফর্ম। মূল নথির সাথে সরাসরি তথ্য যাচাই।"
+    />
+    <meta
+      name="keywords"
+      content="BhoomiTrace, ভূমিট্রেস, ভূমি রেকর্ড, খতিয়ান যাচাই, দাগ নম্বর, মৌজা, আরএস জরিপ, সিএস খতিয়ান, বিএস রেকর্ড, জমি জমা, ভূমি আবেদন ট্র্যাকিং, Land Records Bangladesh, Khatian Verification, Land Trace"
+    />
+    <meta name="author" content="BhoomiTrace Team" />
+    <meta name="publisher" content="BhoomiTrace" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="googlebot" content="index, follow" />
+    <meta name="bingbot" content="index, follow" />
+    <link rel="canonical" href="https://bhoomitrace.org/" />
+
+    <!-- Theme & App Manifest -->
     <meta name="theme-color" content="#1e5a47" />
-    <title>ভূমিট্রেস — BhoomiTrace | ভূমি রেকর্ড ও আবেদন ট্র্যাকিং</title>
-    <meta name="description" content="BhoomiTrace: পুরোনো ভূমি নথির তথ্য উৎসের সঙ্গে মিলিয়ে দেখার একটি স্বাধীন প্রোটোটাইপ। সব তথ্য কাল্পনিক।" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="application-name" content="BhoomiTrace" />
+    <meta name="apple-mobile-web-app-title" content="BhoomiTrace" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- Favicons & Touch Icons -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
+    <!-- Open Graph / Facebook / LinkedIn / WhatsApp -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="BhoomiTrace — ভূমিট্রেস" />
+    <meta property="og:title" content="BhoomiTrace — পুরোনো ভূমি নথি বুঝুন ও রেকর্ড যাচাই করুন" />
+    <meta
+      property="og:description"
+      content="খতিয়ান, দাগ ও মৌজা তথ্যের উৎস সরাসরি মূল নথির সঙ্গে মিলিয়ে দেখার আধুনিক ডিজিটাল প্ল্যাটফর্ম প্রোটোটাইপ। নাগরিক আবেদন ও নিরীক্ষা ডেমো।"
+    />
+    <meta property="og:url" content="https://bhoomitrace.org/" />
+    <meta property="og:image" content="https://bhoomitrace.org/og-image.png" />
+    <meta property="og:image:secure_url" content="https://bhoomitrace.org/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="BhoomiTrace - ভূমি রেকর্ড ও আবেদন ট্র্যাকিং প্ল্যাটফর্ম প্রিভিউ" />
+    <meta property="og:locale" content="bn_BD" />
+    <meta property="og:locale:alternate" content="en_US" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="BhoomiTrace — ভূমি রেকর্ড ও আবেদন ট্র্যাকিং" />
+    <meta
+      name="twitter:description"
+      content="পুরোনো ভূমি নথির খতিয়ান, দাগ ও মৌজা রেকর্ড মিলিয়ে দেখার আধুনিক ডিজিটাল প্রোটোটাইপ প্ল্যাটফর্ম।"
+    />
+    <meta name="twitter:image" content="https://bhoomitrace.org/og-image.png" />
+    <meta name="twitter:image:alt" content="BhoomiTrace প্ল্যাটফর্ম প্রিভিউ" />
+
+    <!-- Font Preloads -->
     <link rel="preload" href="/fonts/hind-siliguri-regular.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preload" href="/fonts/hind-siliguri-semibold.ttf" as="font" type="font/ttf" crossorigin />
+
+    <!-- Structured Data (JSON-LD) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://bhoomitrace.org/#website",
+            "url": "https://bhoomitrace.org/",
+            "name": "BhoomiTrace",
+            "alternateName": "ভূমিট্রেস",
+            "description": "পুরোনো ভূমি নথির খতিয়ান, দাগ ও মৌজা রেকর্ড মিলিয়ে দেখার আধুনিক ডিজিটাল প্ল্যাটফর্ম প্রোটোটাইপ।",
+            "inLanguage": "bn-BD",
+            "potentialAction": {
+              "@type": "SearchAction",
+              "target": "https://bhoomitrace.org/#/records?q={search_term_string}",
+              "query-input": "required name=search_term_string"
+            }
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "https://bhoomitrace.org/#webapp",
+            "name": "BhoomiTrace (ভূমিট্রেস)",
+            "url": "https://bhoomitrace.org/",
+            "applicationCategory": "UtilitiesApplication",
+            "operatingSystem": "All",
+            "browserRequirements": "Requires JavaScript. Requires HTML5.",
+            "description": "পুরোনো ভূমি নথির খতিয়ান, দাগ ও মৌজা রেকর্ড মিলিয়ে দেখার এবং আবেদন ট্র্যাকিং করার আধুনিক ডিজিটাল প্রোটোটাইপ প্ল্যাটফর্ম।",
+            "inLanguage": ["bn", "en"],
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "BDT"
+            }
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://bhoomitrace.org/#organization",
+            "name": "BhoomiTrace",
+            "url": "https://bhoomitrace.org/",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "https://bhoomitrace.org/favicon.svg",
+              "width": "512",
+              "height": "512"
+            }
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

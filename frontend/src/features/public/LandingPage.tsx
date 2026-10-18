@@ -24,9 +24,6 @@ const preview = [
 ]
 
 export default function LandingPage() {
-  useEffect(() => {
-    document.title = "BhoomiTrace — পুরোনো ভূমি নথি বুঝুন"
-  }, [])
 
   return (
     <div className="flex min-h-dvh flex-col">

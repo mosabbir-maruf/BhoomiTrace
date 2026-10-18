@@ -1,2 +1,6 @@
 User-agent: *
 Allow: /
+Disallow: /api/
+
+# Sitemap location
+Sitemap: https://bhoomitrace.org/sitemap.xml

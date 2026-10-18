@@ -1,4 +1,4 @@
-import { useEffect, useId, type ReactNode } from "react"
+import { useId, type ReactNode } from "react"
 import Brand from "@/components/shell/Brand"
 import SiteFooter from "@/components/shell/SiteFooter"
 import Icon from "@/components/ui/Icon"
@@ -99,9 +99,6 @@ export default function AuthLayout({
   story?: Story
   children: ReactNode
 }) {
-  useEffect(() => {
-    document.title = `${title} | BhoomiTrace`
-  }, [title])
 
   return (
     <div className="flex min-h-dvh flex-col bg-folio">
