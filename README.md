@@ -152,6 +152,7 @@ The frontend and API use the same origin through the nginx /api/ proxy, which ke
 ├── .github/
 │   ├── scripts/
 │   │   ├── ghcr-retention.sh
+│   │   ├── mock-ghcr-server.js
 │   │   └── test-ghcr-retention.sh
 │   └── workflows/
 │       ├── ci.yml
@@ -162,6 +163,7 @@ The frontend and API use the same origin through the nginx /api/ proxy, which ke
 │   ├── test/                   Unit and integration tests
 │   ├── drizzle/                Database migrations
 │   ├── Dockerfile
+│   ├── package.json / package-lock.json
 │   ├── .env.example
 │   └── README.md               Backend development guide and API contracts
 ├── frontend/
@@ -170,7 +172,8 @@ The frontend and API use the same origin through the nginx /api/ proxy, which ke
 │   ├── public/                 Static assets and favicon
 │   ├── nginx/                  SPA fallback and /api proxy
 │   ├── Dockerfile
-│   └── README.md               Frontend development and integration guide
+│   ├── package.json / pnpm-lock.yaml
+│   └── README.md               Frontend development guide
 ├── deploy/
 │   ├── docker-compose.prod.yml Separate single-host deployment stack
 │   ├── env/stack.env.example   Production non-secret configuration template
