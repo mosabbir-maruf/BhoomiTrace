@@ -246,7 +246,12 @@ export function routeTitle(id: RouteId): string {
 }
 
 export function routeSeoTitle(id: RouteId): string {
-  return routes[id].seoTitle ?? `${routes[id].title} | BhoomiTrace`
+  // Index once and view the definition as RouteDef. Every route in the
+  // `as const` table defines seoTitle, so narrowing `routes[id].seoTitle ?? …`
+  // directly collapses the fallback branch to `never`; the cast keeps the
+  // optional property's fallback type-checkable.
+  const route = routes[id] as RouteDef
+  return route.seoTitle ?? `${route.title} | BhoomiTrace`
 }
 
 export function routeDescription(id: RouteId): string {
