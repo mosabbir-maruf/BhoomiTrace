@@ -65,6 +65,40 @@ pnpm run preview
 
 ---
 
+## Docker
+
+The frontend ships as a container in the root Compose stack: a multi-stage
+`frontend/Dockerfile` builds the Vite bundle on Node.js 24 (installing from the
+frozen `pnpm-lock.yaml`) and serves only the compiled static output from an
+**unprivileged nginx** runtime image (uid 101, port 8080). `vite preview` is
+**not** used in production.
+
+```bash
+# From the repository root: builds and starts postgres, api, worker and frontend
+docker compose up -d --build
+# Open the app at http://127.0.0.1:5173
+```
+
+Inside the container, nginx serves the SPA with an `index.html` fallback and
+reverse-proxies `/api/` to the Compose `api` service while preserving the
+complete URI. Because the client's default `API_BASE_URL` is empty, requests go
+to relative `/api/v1/...` paths, which nginx forwards to `http://api:3000/api/v1/...`
+on the same origin — so session cookies (`bt_session`), the CSRF header
+(`x-csrf-token`), document uploads, and streamed downloads all work without CORS.
+
+The proxy accepts request bodies up to 6 MiB (the backend default
+`UPLOAD_MAX_BYTES` is 5 MiB); raise `client_max_body_size` in
+`frontend/nginx/default.conf` if you increase the backend limit.
+
+To build the image directly:
+
+```bash
+docker build -t bhoomitrace-frontend:local ./frontend
+docker run --rm -p 127.0.0.1:5173:8080 --add-host api:127.0.0.1 bhoomitrace-frontend:local
+```
+
+---
+
 ## Backend Integration & API Architecture
 
 The frontend communicates with the BhoomiTrace Fastify backend through a standardized API client layer (`src/lib/api/`):

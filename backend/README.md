@@ -80,9 +80,9 @@ API, and a separate background worker. The image is built from
 `backend/Dockerfile`; `docker-compose.yml` at the repository root wires the
 services together. Nothing in this section needs a host Node install.
 
-**Phase 3 containerises the backend only.** The frontend is not part of the
-Compose stack; see
-[Running the frontend against the local API](#running-the-frontend-against-the-local-api).
+**The Compose stack runs the backend and the frontend.** See
+[Running the frontend against the local API](#running-the-frontend-against-the-local-api)
+for the containerised frontend and the optional host-run Vite dev server.
 
 ### Start the stack
 
@@ -213,7 +213,10 @@ database and is claimed when a worker starts again.
 
 ### Running the frontend against the local API
 
-The frontend is **not** containerised in this phase. Run it separately:
+The Compose stack includes a containerised frontend (a Vite build served by
+unprivileged nginx that reverse-proxies `/api/` to the API on the same origin),
+so `docker compose up -d --build` serves the app at `http://127.0.0.1:5173`.
+To use the optional host-run Vite dev server instead:
 
 1. Start the backend stack (`docker compose up -d --build`).
 2. Confirm `http://127.0.0.1:3000/health` returns `200`.
@@ -764,63 +767,75 @@ contain the superseded sentence, so it can never overwrite an edited row.
 
 Phase 4 adds GitHub Actions workflows under `.github/workflows/`. They run on
 GitHub-hosted `ubuntu-latest` runners and do not depend on a developer's local
-Docker state or `.env` files.
+Docker state or `.env` files. They trigger on pushes and pull requests that
+touch `backend/`, `frontend/`, `docker/`, `docker-compose.yml`,
+`.github/workflows/**`, `.github/scripts/**`, `.env.example`, or `README.md`.
 
 ### Workflows
 
-- **`ci.yml`** -- runs on pushes and pull requests touching `backend/`,
-  `docker/`, `docker-compose.yml`, `.github/workflows/ci.yml`, or `.env.example`.
-  Jobs:
-  - `typecheck-build`: `npm ci`, `npm run typecheck`, `npm run build` (Node 24).
-  - `test`: spins up a `postgres:17-alpine` service container (with the init
-    script mounted so `bhoomitrace` and `bhoomitrace_test` are created), then
-    `npm test` against `TEST_DATABASE_URL`. Migrations are applied by the test
-    harness itself.
-  - `docker`: `docker compose config`, `docker compose build`, an image-hygiene
-    check (non-root user, no dev tooling, migrations present, no credential
-    literal), and a Compose smoke test (`up -d`, health checks, `down`).
-- **`publish-image.yml`** -- publishes `ghcr.io/<owner>/bhoomitrace-backend` on
-  pushes to `main`, version tags (`v*.*.*`), and manual dispatch. Tags:
-  immutable full-SHA (`sha-<40>`), branch, semver (`x.y.z`, `x.y`), and
-  `latest` only on the default branch. Uses `GITHUB_TOKEN` with `packages: write`
-  scoped to the publish job only; no credentials are passed as build arguments.
-- **`ghcr-retention-report.yml`** -- manual (`workflow_dispatch`) dry-run report
-  that lists package versions and marks keep/delete candidates. It **never
-  deletes** anything.
+- **`ci.yml`** -- backend, frontend, retention, and Docker jobs:
+  - `typecheck-build` (backend): `npm ci`, `npm run typecheck`, `npm run build`
+    (Node 24).
+  - `test` (backend): a `postgres:17-alpine` service container, a test database
+    created from the committed init script after checkout, seeded synthetic data,
+    then `npm test` against `TEST_DATABASE_URL`.
+  - `frontend`: pnpm 9 (compatible with the committed `lockfileVersion 9.0`),
+    Node 24, `pnpm install --frozen-lockfile`, `pnpm test`,
+    `pnpm exec tsc --noEmit`, and `pnpm run build`.
+  - `retention-test`: runs `.github/scripts/test-ghcr-retention.sh`, the mocked
+    GHCR retention suite.
+  - `docker`: `docker compose config`, `docker compose build` (both images),
+    image-hygiene checks for the backend and frontend images, and a Compose smoke
+    test (backend readiness and liveness, frontend serving plus SPA fallback, and
+    an asserted `/api/` proxy request reaching the backend), then
+    `docker compose down`.
+- **`publish-image.yml`** -- publishes two images on pushes to `main`, version
+  tags (`v*.*.*`), and manual dispatch, using a build matrix:
+  `ghcr.io/<owner>/bhoomitrace-backend` and
+  `ghcr.io/<owner>/bhoomitrace-frontend`. Tags: immutable full-SHA (`sha-<40>`),
+  branch, semver (`x.y.z`, `x.y`), and `latest` only on the default branch. Uses
+  `GITHUB_TOKEN` with `packages: write` scoped to the publish and retention jobs
+  only; no credentials are passed as build arguments.
+- **`ghcr-retention-report.yml`** -- manual (`workflow_dispatch`) report that
+  lists package versions and marks keep/delete candidates. It runs in dry-run
+  (report) mode unless `delete=true` is explicitly selected.
 
 ### GHCR retention policy
 
-Applies to `ghcr.io/<owner>/bhoomitrace-backend`. Implemented by
-`.github/scripts/ghcr-retention.sh`, run automatically after each publish
-(delete mode, keep 2) and on demand via `ghcr-retention-report.yml`.
+Applies to both published packages (`bhoomitrace-backend`,
+`bhoomitrace-frontend`). Implemented by `.github/scripts/ghcr-retention.sh`, run
+automatically after each publish (delete mode, keep 2) and on demand via
+`ghcr-retention-report.yml`.
 
 - **Always kept (never deleted):**
   - the most recent 2 versions by creation time,
-  - every version carrying an immutable `sha-*` tag,
-  - every version carrying a semver tag (`x.y.z`).
+  - the most recent 10 versions carrying a `sha-*` tag,
+  - every version carrying a semver release tag (`x.y.z` or `x.y`, optional `v`).
 - **Deleted automatically after publish:**
-  - versions that are neither in the newest 2 nor carry an immutable tag,
-    i.e. older branch-tagged or untagged images.
-- **Safety guards:** never deletes when 2 or fewer versions exist; never
-  deletes a version in the keep set; aborts if a deletion would leave fewer
-  than 2 versions; logs every action and verifies the final count.
-- **Manual override:** `ghcr-retention-report.yml` runs in dry-run (report)
-  mode by default; set `delete=true` to delete candidates manually.
-- **Limitation:** because immutable-tagged versions are always retained, the
-  package may hold more than 2 versions when releases exist. Exact "only 2
-  images" would require deleting release references, which is intentionally
-  not done (rollback safety). Package visibility (public/private) is governed
-  by GitHub settings and is not asserted here.
+  - versions that are neither in the newest 2, nor in the newest 10 SHA-tagged,
+    nor semver-tagged -- i.e. older branch-tagged or untagged images.
+- **Safety guards (fail closed):** `MODE` must be exactly `report` or `delete`;
+  `KEEP_COUNT`/`SHA_KEEP_COUNT` must be positive integers; every version's id,
+  creation time, and tag metadata is validated before any decision; a non-array
+  or non-200 API page, a malformed response, or an invalid keep set aborts with
+  zero deletions; a failed DELETE aborts the remaining deletions and returns
+  non-zero; the final count re-checks HTTP status, JSON structure, and every page
+  before printing `Retention complete`; file-fixture (`VERSIONS_FILE`) mode
+  refuses to run with `MODE=delete` and never issues an HTTP request.
+- **Manual override:** `ghcr-retention-report.yml` runs in dry-run (report) mode
+  by default; set `delete=true` to delete candidates manually.
 
 ### Limitations
 
-- No push to EC2 or other hosts is performed in Phase 4.
-- Automated deletion runs after each publish via
-  `.github/scripts/ghcr-retention.sh` (keep newest 2 plus immutable tags);
-  the retention report workflow still supports dry-run for manual review.
-- Package visibility (public vs. private) is governed by the repository/package
-  settings on GitHub and is not asserted here; verify in the GitHub UI after the
-  first publish.
+- No push to EC2 or any host is performed; deployment belongs to Phase 5.
+- Because semver- and SHA-tagged versions are retained, a package may hold more
+  than 2 versions when releases exist. Exact "only 2 images" would require
+  deleting release references, which is intentionally not done (rollback safety).
+- **Package visibility** (public vs. private) is governed by GitHub package
+  settings and is not asserted here. After the **first** successful publish,
+  open the package under the repository owner's "Packages" and set the intended
+  visibility (private by default) in the GitHub UI; this one-time step cannot be
+  automated with `GITHUB_TOKEN` alone.
 
 ## Known limitations
 
@@ -841,7 +856,7 @@ Recorded honestly, because each of these is a real gap rather than a detail.
   decimals as strings, plus `ownershipShare` as a reduced `"n/d"`. The React
   frontend's contract in `frontend/src/lib/api/` expects `areaDecimal` as a number
   (and camelCase FastAPI-style payloads). This is a **documented mismatch, not a
-  frontend change**: the frontend is untouched and uncommitted on this branch.
+  frontend change**: the backend work does not alter the frontend contract.
   Anything that consumes a decimal must parse it, not assume a float.
 - **The download route is absent from the OpenAPI document's `200` body.** It
   streams a file rather than JSON, so the generated document declares its failure
@@ -859,20 +874,22 @@ Recorded honestly, because each of these is a real gap rather than a detail.
   as a **draft** (there is no `submit` flag on create); the detail contract's
   `documents: DocumentItem[]` differs from the API's `declaredDocuments: string[]`;
   and the frontend's demo `timeline` copy is Bengali text generated in the client,
-  not from the audit trail. The frontend is untouched.
+  not from the audit trail. The backend work does not alter the frontend contract.
 - **Rate limits are per route.** The login and registration budgets are counted
   separately, and both are per client address, not per account.
 - **`TRUST_PROXY` is off by default.** Forwarded headers are only honoured when a
   deployment states that a proxy is in front of the process. Turning it on without
   such a proxy lets a caller choose its own address in the logs and in the rate
   limiter.
-- **Phase 3 containerises the backend only.** `docker-compose.yml` runs
-  PostgreSQL, the one-shot migration job, the API, and the worker. The frontend
-  is not part of the Compose stack and is run separately against the local API
-  (see [Running the frontend against the local API](#running-the-frontend-against-the-local-api)).
-- **No CI workflow and no production deployment** is part of this phase. The
-  image is built and run locally; publishing to a registry, and any
-  orchestrator-specific configuration, belong to later phases.
+- **The Compose stack includes the backend and the frontend.**
+  `docker-compose.yml` runs PostgreSQL, the one-shot migration job, the API, the
+  worker, and a containerised frontend (a Vite build served by unprivileged
+  nginx, which reverse-proxies `/api/` to the API on the same origin). The
+  optional host-run Vite dev server is documented separately (see
+  [Running the frontend against the local API](#running-the-frontend-against-the-local-api)).
+- **CI runs, but no production deployment does.** `.github/workflows/` builds
+  and tests both packages and publishes both images to GHCR; pushing to a host,
+  and any orchestrator-specific configuration, belong to later phases.
 - **The base image tracks the Node 24 LTS line, not a digest.**
   `node:24-bookworm-slim` is deliberately not pinned by digest yet; the glibc
   variant is used because `@node-rs/argon2` resolves a prebuilt native binding
