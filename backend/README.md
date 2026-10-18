@@ -39,11 +39,11 @@ to it, and keeps an append-only trail of who decided what. It does not determine
 legal ownership and does not issue legal approval: everything it raises is a
 **discrepancy for a person to resolve**.
 
-This document describes Phase 1 (foundation, schema, database policy),
-Phase 2 (authentication, the REST surface, uploaded evidence, deterministic
-validation, the reviewer workflow, the audit trail, and the background worker),
-and Phase 3 (the containerised local stack: a multi-stage image, Compose
-services, migrations as a one-shot job, and the operations workflow).
+This document covers the backend end to end: the database schema and its policy,
+authentication and the REST surface, uploaded evidence, deterministic validation,
+the reviewer workflow and the append-only audit trail, the background worker, and
+the containerised stack (a multi-stage image, Compose services, and migrations as
+a one-shot job).
 
 ## Prerequisites
 
@@ -53,7 +53,7 @@ services, migrations as a one-shot job, and the operations workflow).
 - **Docker Desktop**, required for the local database and for the containerised
   backend stack. Docker is *not* required if you run the API and worker directly
   with mise against a containerised database — the workflow in
-  [First-time setup](#first-time-setup) below.
+  [Run it locally](#run-it-locally) below.
 - PostgreSQL is **not** installed on the host; it runs in a container.
 
 `mise` is installed under `~/.local/bin` and this repository deliberately does
@@ -64,11 +64,13 @@ explicit about:
 > may not be 24. Every command in this README is therefore written to run through
 > mise, so the pinned runtime is always used.
 
-## First-time setup
+## Run it locally
 
 ```bash
-# 1. Start PostgreSQL (from the repository root)
-docker compose up -d
+# 1. Start PostgreSQL only, from the repository root. A plain
+#    `docker compose up -d` would also start the containerised API on :3000,
+#    and the host API below could not bind that port.
+docker compose up -d postgres
 
 # 2. Put mise on PATH for this shell
 export PATH="$HOME/.local/bin:$PATH"
@@ -100,11 +102,11 @@ Optionally, to make mise permanent for your own shell, run
 `echo 'eval "$(mise activate zsh)"' >> ~/.zshrc` yourself. That is a change to
 your shell configuration, so it is left to you and is not done by this project.
 
-`docker compose up -d` publishes PostgreSQL on **`127.0.0.1:5433` only** and
-creates two databases: `bhoomitrace` (development) and `bhoomitrace_test`
+`docker compose up -d postgres` publishes PostgreSQL on **`127.0.0.1:5433` only**
+and creates two databases: `bhoomitrace` (development) and `bhoomitrace_test`
 (integration tests). Both come from `docker/postgres/init/`.
 
-## Containerised local stack
+## Run everything in Docker
 
 The whole backend runs in containers: PostgreSQL, a one-shot migration job, the
 API, and a separate background worker. The image is built from
@@ -772,8 +774,8 @@ contradict each other. The resulting policy:
 - `parcel_lineage` uses `ON DELETE RESTRICT` too, so lineage can never be
   silently orphaned.
 
-These behaviours are covered by `test/integration/deletion-policy.test.ts` and
-`test/integration/schema-phase2.test.ts`.
+These behaviours are covered by the deletion-policy and schema integration suites
+under `test/integration/`.
 
 ### Migrations
 
@@ -892,7 +894,7 @@ Recorded honestly, because each of these is a real gap rather than a detail.
   [Running the frontend against the local API](#running-the-frontend-against-the-local-api)).
 - **CI runs, but no production deployment does.** `.github/workflows/` builds
   and tests both packages and publishes both images to GHCR; pushing to a host,
-  and any orchestrator-specific configuration, belong to later phases.
+  and any orchestrator-specific configuration, are out of scope here.
 - **The base image tracks the Node 24 LTS line, not a digest.**
   `node:24-bookworm-slim` is deliberately not pinned by digest yet; the glibc
   variant is used because `@node-rs/argon2` resolves a prebuilt native binding

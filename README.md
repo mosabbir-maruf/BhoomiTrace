@@ -38,13 +38,14 @@ and audit trail.
 - [What BhoomiTrace is](#what-bhoomitrace-is)
 - [What it is not](#what-it-is-not)
 - [Demo limitations](#demo-limitations)
-- [Project status](#project-status)
-- [Quickstart: run it on your machine](#quickstart-run-it-on-your-machine)
+- [Run it locally](#run-it-locally)
+- [Run everything in Docker](#run-everything-in-docker)
 - [Architecture](#architecture)
 - [Repository layout](#repository-layout)
 - [Environment variables](#environment-variables)
 - [Testing](#testing)
 - [CI/CD and container images](#cicd-and-container-images)
+- [Production readiness](#production-readiness)
 - [Documentation map](#documentation-map)
 - [Known limitations](#known-limitations)
 - [License](#license)
@@ -103,34 +104,124 @@ Read this before judging the output — it is the honest scope of what runs:
 - **No account lockout.** Failed logins are rate limited per address, not locked
   per account.
 - **The hosted demo is a single-instance deployment.** If
-  [devtree.online](https://devtree.online/) is not responding, the local quickstart
-  below runs the identical stack on your own machine.
+  [devtree.online](https://devtree.online/) is not responding, the
+  [local run](#run-it-locally) below starts the same stack on your own machine.
 
 For the full list, see [Known limitations](#known-limitations).
 
-## Project status
+## Run it locally
 
-| Phase | Description | Status |
-| ----- | ----------- | ------ |
-| 1 | Backend foundation and database | Complete |
-| 2 | Authentication, REST surface, uploads, validation, review, audit, worker | Complete |
-| 3 | Containerised local stack (backend + frontend) | Complete |
-| 4 | CI/CD and GHCR image publishing | Complete |
-| 5 | Single-host production baseline (`deploy/`) | Baseline committed — **not verified against real AWS** |
+Recommended for development: the API, the worker, and the frontend all run on your
+machine with hot reload, and only PostgreSQL runs in a container.
 
-Phase 5 ships a *baseline*, not a production guarantee. The AWS-specific steps
-have not been run against real AWS resources, and a pre-deployment audit remains
-**NO-GO for real production**. Read
-[verification status](deploy/README.md#15-verification-status) and
-[known blockers](deploy/README.md#16-known-blockers-and-limitations-prioritised)
-in `deploy/README.md` before treating anything here as deployable.
+### Prerequisites
+
+- **Node.js 24**, installed per-user with [mise](https://mise.jdx.dev). The pinned
+  version lives in `backend/.mise.toml`, and `backend/.npmrc` sets `engine-strict`,
+  so a different major fails fast instead of behaving subtly differently.
+- **pnpm 9** for the frontend — the lockfile is `pnpm-lock.yaml`.
+- **Docker**, for the database container only.
+
+### 1. Start the database
+
+```bash
+# from the repository root: the database only
+docker compose up -d postgres
+docker compose ps postgres     # wait for "healthy"
+```
+
+Use this instead of a plain `docker compose up` for local development. A plain
+`up` also starts the containerised API on `127.0.0.1:3000`, and the host API below
+would then fail to bind that port.
+
+### 2. Backend: install, migrate, seed
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"   # put mise on PATH for this shell
+
+cd backend
+mise trust                             # only if mise reports the config as untrusted
+mise install                           # installs the pinned Node 24
+mise exec -- npm ci                    # exactly what the lockfile pins
+cp .env.example .env                   # local-only values; .env is git-ignored
+mise exec -- npm run db:migrate        # apply migrations
+mise exec -- npm run db:seed           # load the synthetic demo dataset
+```
+
+`backend/.env.example` already points at the container database on
+`127.0.0.1:5433`, so nothing needs editing. If you would rather not change `PATH`,
+prefix each command with `~/.local/bin/` — for example
+`~/.local/bin/mise exec -- npm ci`.
+
+### 3. Backend: start the API and the worker
+
+These are two separate processes. In one terminal:
+
+```bash
+cd backend
+mise exec -- npm run dev       # API with reload on http://127.0.0.1:3000
+```
+
+In a second terminal:
+
+```bash
+cd backend
+mise exec -- npm run worker    # background extraction worker
+```
+
+### 4. Create a reviewer or admin account
+
+There is deliberately no HTTP route, request field, or environment variable that
+can grant a privileged role — privilege would otherwise be one bug away from being
+self-assigned. Provision an account out of band:
+
+```bash
+cd backend
+mise exec -- npm run db:admin -- \
+  --email reviewer@example.test --role reviewer --name "Demo Reviewer"
+```
+
+Omit `--password` and a strong one is generated and printed once. It is never
+written to a log or a file, and only its Argon2id hash reaches the database.
+
+### 5. Frontend: start the dev server
+
+```bash
+cd frontend
+pnpm install
+pnpm run dev        # http://localhost:5173
+```
+
+Vite proxies `/api` to `http://localhost:3000`, so the browser sees a single origin
+and session cookies behave as they would behind a proxy.
+
+### 6. Open it
+
+| What | URL | Notes |
+| ---- | --- | ----- |
+| **Web app** | <http://localhost:5173> | Vite dev server with hot reload |
+| API | <http://127.0.0.1:3000> | `/health`, `/health/live` |
+| **API reference** | <http://127.0.0.1:3000/docs> | Swagger UI generated from the route schemas |
+| PostgreSQL | `127.0.0.1:5433` | the `postgres` container |
+
+### 7. Stop
+
+Stop the API, worker, and Vite dev server with `Ctrl-C`, then:
+
+```bash
+docker compose stop postgres     # the database keeps its named volume
+```
+
+The `bhoomitrace-postgres-data` volume survives, so database rows are still there
+next time. **Never** run `docker compose down -v`, and never prune volumes: that
+deletes the database and every uploaded file.
 
 ---
 
-## Quickstart: run it on your machine
+## Run everything in Docker
 
-This builds both images **from source** with Docker Compose. It does not depend on
-GHCR images being available, and it needs no host Node.js install.
+The whole stack in containers, with no host Node.js or pnpm install. This builds
+both images **from source**, so it does not depend on GHCR images being available.
 
 ### Prerequisites
 
@@ -496,6 +587,28 @@ packages being pullable.
 > it. Until a manifest-aware policy exists, the job only reports.
 
 ---
+
+## Production readiness
+
+`deploy/` contains a **single-host production baseline**: a separate Compose
+project, an HTTPS edge proxy, EBS-backed persistence, off-host backups with a
+restore drill, monitoring configuration, and a deploy/rollback path built on
+immutable images.
+
+It is a baseline, not a production guarantee:
+
+- The AWS-specific steps (SSM Parameter Store or Secrets Manager, S3,
+  CloudWatch, and a real Let's Encrypt certificate) have **not** been run against
+  real AWS resources.
+- A single EC2 instance is not highly available, and an EBS volume is not a
+  backup.
+- A pre-deployment audit remains **NO-GO for real production**.
+
+Read [verification status](deploy/README.md#15-verification-status) and
+[known blockers](deploy/README.md#16-known-blockers-and-limitations-prioritised)
+in `deploy/README.md` before treating anything here as deployable. The
+[known limitations](#known-limitations) below are the product-side view of the
+same picture.
 
 ## Documentation map
 

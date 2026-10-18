@@ -79,7 +79,7 @@ the Fastify API over relative `/api/v1` paths.
 - **pnpm 9** — the lockfile is `pnpm-lock.yaml`. `npm` will not reproduce it
   faithfully.
 
-## Getting started
+## Run it locally
 
 ```bash
 cd frontend
@@ -89,16 +89,21 @@ pnpm run dev
 
 The dev server listens on <http://localhost:5173>, which is already in the backend's
 default `CORS_ALLOWED_ORIGINS`. It needs a running API to show real data; without
-one the app still loads, and the explicit demo routes below fall back to local mock
-data.
+one the app still loads, and the explicit demo routes fall back to local mock data.
+
+Start the database, API, and worker from the repository root — but leave the
+containerised frontend out, so the dev server can own port 5173:
 
 ```bash
-# start the backend + database from the repository root first
-docker compose up -d --build
+# from the repository root
+docker compose up -d postgres api worker
 
-cd frontend
+# then, in frontend/
 pnpm run dev
 ```
+
+To run the API and worker on the host with hot reload instead, see
+[`../backend/README.md#run-it-locally`](../backend/README.md#run-it-locally).
 
 ## Tests, typecheck, and build
 
@@ -134,7 +139,7 @@ the standard checks stay fast and browser-free.
 > Wiring `pnpm test:e2e` into CI needs a browser download and a live Compose stack.
 > It is deliberately not part of `.github/workflows/ci.yml`.
 
-## Container
+## Run everything in Docker
 
 `frontend/Dockerfile` is a multi-stage build: it compiles the Vite bundle on
 Node.js 24 from the frozen `pnpm-lock.yaml`, then copies **only the static output**

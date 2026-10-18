@@ -74,7 +74,7 @@ volume, or a port.
   not against a bad migration, an accidental delete, or a compromised host.
   The S3 copies are the backup.
 * **Not verified against real AWS.** See [Verification status](#15-verification-status).
-* **Not a complete product.** The Phase 5 audit remains **NO-GO for real
+* **Not a complete product.** The pre-deployment audit remains **NO-GO for real
   production**: there is no OCR, no account lockout, the extraction reviewer
   endpoints are absent, and no live Gemini/Groq call has ever been made. This
   baseline makes a *synthetic-data demo* survivable; it does not make the
@@ -770,7 +770,7 @@ a deliberately triggered alarm that produces a real notification; and
    instructions, not a deployed alarm.
 7. **Frontend image base is not digest-pinned**, and the CI smoke test does not
    cover authenticated, upload, or reviewer flows.
-8. **Product gaps from the Phase 5 audit remain open** — no OCR, no account
+8. **Product gaps from the pre-deployment audit remain open** — no OCR, no account
    lockout, no live extraction provider call, and the extraction reviewer
    endpoints are still missing.
 9. **`shellcheck` has never been run against these scripts** (it is not installed
