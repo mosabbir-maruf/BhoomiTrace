@@ -1,0 +1,10 @@
+# Standalone backend package ignore rules
+
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.local-storage/
+.env
+.env.*
+!.env.example

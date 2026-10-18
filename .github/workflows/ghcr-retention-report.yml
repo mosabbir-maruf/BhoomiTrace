@@ -1,0 +1,46 @@
+name: GHCR retention report
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: 'GHCR container package name'
+        required: false
+        default: 'bhoomitrace-backend'
+      keep_count:
+        description: 'Newest versions to keep overall (policy: 2)'
+        required: false
+        default: '2'
+      sha_keep_count:
+        description: 'Newest SHA-tagged versions to keep (policy: 10)'
+        required: false
+        default: '10'
+      delete:
+        description: 'Delete candidates (false = dry-run report only)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  report:
+    name: Retention report (delete only if explicitly enabled)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.delete == 'true' && 'delete' || 'report' }}
+      KEEP_COUNT: ${{ inputs.keep_count }}
+      SHA_KEEP_COUNT: ${{ inputs.sha_keep_count }}
+      OWNER: ${{ github.repository_owner }}
+      PACKAGE: ${{ inputs.package_name }}
+      TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run retention helper
+        run: bash .github/scripts/ghcr-retention.sh

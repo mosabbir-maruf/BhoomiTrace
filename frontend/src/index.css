@@ -1,0 +1,296 @@
+@import 'tailwindcss';
+
+@font-face {
+  font-family: 'Hind Siliguri';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/hind-siliguri-regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Hind Siliguri';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/hind-siliguri-medium.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Hind Siliguri';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/hind-siliguri-semibold.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Noto Serif Bengali';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/noto-serif-bengali-semibold.ttf') format('truetype');
+}
+/*
+  BhoomiTrace design tokens.
+  Palette comes from the land register itself: cool ledger paper, iron-gall ink,
+  survey-map green for actions, and stamp red for errors only.
+*/
+@theme {
+  --breakpoint-sm: 40rem;
+  --breakpoint-md: 48rem;
+  --breakpoint-lg: 64rem;
+  --breakpoint-xl: 80rem;
+
+  --font-sans: 'Hind Siliguri', 'Noto Sans Bengali', 'Nirmala UI', 'Vrinda', system-ui, sans-serif;
+  --font-display: 'Noto Serif Bengali', 'Hind Siliguri', 'Nirmala UI', 'Vrinda', serif;
+
+  /* Bengali glyphs sit taller than Latin, so the scale starts at 17px with generous leading. */
+  --text-xs: 0.875rem;
+  --text-xs--line-height: 1.6;
+  --text-sm: 1rem;
+  --text-sm--line-height: 1.65;
+  --text-base: 1.0625rem;
+  --text-base--line-height: 1.75;
+  --text-lg: 1.25rem;
+  --text-lg--line-height: 1.6;
+  --text-xl: 1.5rem;
+  --text-xl--line-height: 1.45;
+  --text-2xl: 2rem;
+  --text-2xl--line-height: 1.3;
+  --text-3xl: 2.75rem;
+  --text-3xl--line-height: 1.2;
+
+  --color-*: initial;
+  --color-white: #ffffff;
+  --color-paper: #f6f7f4;
+  --color-surface: #ffffff;
+  --color-sunken: #eef0ec;
+  --color-ink: #1d2b25;
+  --color-ink-muted: #46524b;
+  --color-rule: #dde2dc;
+  --color-rule-strong: #a3aca4;
+  --color-field: #7c867f;
+
+  --color-accent: #1e5a47;
+  --color-accent-hover: #174a3a;
+  --color-accent-soft: #dce9e2;
+
+  --color-info: #1f4e79;
+  --color-info-soft: #e0e9f2;
+  --color-warning: #7a5200;
+  --color-warning-soft: #f6ebcf;
+  --color-success: #22663b;
+  --color-success-soft: #dfeee2;
+  --color-danger: #a3271b;
+  --color-danger-soft: #f7e3df;
+
+  /* Brand panel: deep survey-sheet green with warm ledger-paper text. */
+  --color-forest: #15382d;
+  --color-forest-line: #2d5a4b;
+  --color-on-forest: #f4efe3;
+  --color-on-forest-muted: #c8d2c6;
+
+  --color-focus: #1d4f91;
+  --color-folio: #fbf9f2;
+  --color-highlight: #fbe7a8;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+
+  --shadow-float: 0 16px 40px -16px rgb(24 33 43 / 0.35);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  :root {
+    --focus-ring: var(--color-focus);
+    color-scheme: light;
+  }
+
+  html {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+  }
+
+  /* Every clickable control shows a pointer (Tailwind v4 resets buttons to the default cursor). */
+  :where(button, [role="tab"], summary, label:has(input), select):not(:disabled) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  /* Keep focused elements clear of the sticky top bar (WCAG 2.4.11). */
+  :where(a, button, input, select, textarea, [tabindex]) {
+    scroll-margin-top: 6rem;
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+    color: var(--color-ink);
+  }
+}
+
+@layer components {
+  /* On the green footer the default blue ring would vanish; use a light ring instead. */
+  .footer-field,
+  .forest-field {
+    --focus-ring: #f2c14e;
+  }
+
+  .page-width {
+    width: 100%;
+    max-width: 72rem;
+    margin-inline: auto;
+    padding-inline: 1rem;
+  }
+  @media (width >= 40rem) {
+    .page-width {
+      padding-inline: 1.5rem;
+    }
+  }
+  /* Feedback for a person's action: a result message fades in where it appears.
+     Opacity only, so it stays under reduced motion (tier 3). */
+  .notice-in {
+    animation: notice-in 180ms ease-out both;
+  }
+  @keyframes notice-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  .text-link {
+    color: var(--color-accent);
+    font-weight: 500;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+    text-underline-offset: 0.25em;
+  }
+  /* Standalone links get a 44px touch target; links inside a sentence stay inline. */
+  .text-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+  }
+  :where(p, li, dd) > .text-link {
+    display: inline;
+    min-height: 0;
+  }
+  .text-link:hover {
+    text-decoration-color: currentColor;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Mobile navigation drawer: native <dialog> handles focus trapping and Escape. */
+  .nav-drawer {
+    margin: 0;
+    inset: 0 auto 0 0;
+    height: 100dvh;
+    max-height: 100dvh;
+    width: min(20rem, 88vw);
+    max-width: none;
+    padding: 0;
+    border: 0;
+    opacity: 1;
+    transform: translateX(0);
+    transition:
+      transform 220ms var(--ease-out),
+      opacity 220ms var(--ease-out),
+      overlay 220ms allow-discrete,
+      display 220ms allow-discrete;
+  }
+  .nav-drawer:not([open]) {
+    transform: translateX(-100%);
+    transition-duration: 150ms;
+  }
+  @starting-style {
+    .nav-drawer[open] {
+      transform: translateX(-100%);
+    }
+  }
+  .nav-drawer::backdrop {
+    background: rgb(20 30 25 / 0.45);
+  }
+
+  /* Tables collapse into labelled rows below the md breakpoint. Explicit ARIA roles
+     on the markup keep table semantics when display values change. */
+  @media (width < 48rem) {
+    .data-table thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    .data-table,
+    .data-table tbody,
+    .data-table tr {
+      display: block;
+    }
+    .data-table tr {
+      padding: 0.875rem 1rem;
+      border-top: 1px solid var(--color-rule);
+    }
+    .data-table tr:first-child {
+      border-top: 0;
+    }
+    .data-table :is(td, th) {
+      display: grid;
+      grid-template-columns: 7.5rem minmax(0, 1fr);
+      gap: 0.75rem;
+      padding: 0.25rem 0;
+      border: 0;
+    }
+    .data-table :is(td, th)::before {
+      content: attr(data-label);
+      color: var(--color-ink-muted);
+      font-size: var(--text-sm);
+      font-weight: 400;
+    }
+  }
+}
+
+/*
+  Reduced motion, tiered (accessible-animation skill): the global net stops runaway motion,
+  then the drawer keeps a short fade instead of its slide.
+*/
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .nav-drawer,
+  .nav-drawer:not([open]) {
+    transform: none;
+    transition:
+      opacity 150ms ease,
+      overlay 150ms allow-discrete,
+      display 150ms allow-discrete !important;
+  }
+  .nav-drawer:not([open]) {
+    opacity: 0;
+  }
+  @starting-style {
+    .nav-drawer[open] {
+      transform: none;
+      opacity: 0;
+    }
+  }
+}
