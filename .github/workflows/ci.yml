@@ -1,22 +1,20 @@
-name: Backend CI
+name: CI
 
 on:
   push:
-    branches: [main, backend, 'infra/**']
-    paths:
+    branches: [main, backend, frontend, 'infra/**', 'fix/**']
+    paths: &ci-paths
       - 'backend/**'
+      - 'frontend/**'
       - 'docker/**'
       - 'docker-compose.yml'
-      - '.github/workflows/ci.yml'
+      - '.github/workflows/**'
+      - '.github/scripts/**'
       - '.env.example'
+      - 'README.md'
   pull_request:
-    branches: [main, backend, 'infra/**']
-    paths:
-      - 'backend/**'
-      - 'docker/**'
-      - 'docker-compose.yml'
-      - '.github/workflows/ci.yml'
-      - '.env.example'
+    branches: [main, backend, frontend, 'infra/**', 'fix/**']
+    paths: *ci-paths
   workflow_dispatch:
 
 permissions:
@@ -28,7 +26,7 @@ concurrency:
 
 jobs:
   typecheck-build:
-    name: Typecheck and build
+    name: Backend typecheck and build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -55,7 +53,7 @@ jobs:
         run: npm run build
 
   test:
-    name: Test suite (PostgreSQL)
+    name: Backend test suite (PostgreSQL)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -131,6 +129,41 @@ jobs:
       - name: Run test suite
         run: npm test
 
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '9'
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit and contract tests
+        run: pnpm test
+
+      - name: TypeScript typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Production build
+        run: pnpm run build
+
   retention-test:
     name: GHCR retention mocked tests
     runs-on: ubuntu-latest
@@ -143,9 +176,9 @@ jobs:
         run: bash .github/scripts/test-ghcr-retention.sh
 
   docker:
-    name: Compose validation and image build
+    name: Compose validation, image build, and smoke test
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -153,10 +186,10 @@ jobs:
       - name: Validate Compose configuration
         run: docker compose config
 
-      - name: Build backend image
+      - name: Build backend and frontend images
         run: docker compose build
 
-      - name: Image hygiene check
+      - name: Backend image hygiene check
         run: |
           docker run --rm --entrypoint sh bhoomitrace-backend:local -c '
             set -e
@@ -168,19 +201,63 @@ jobs:
               echo "credential literal found in image" >&2
               exit 1
             fi
-            echo "image hygiene ok"
+            echo "backend image hygiene ok"
+          '
+
+      - name: Frontend image hygiene check
+        run: |
+          docker run --rm --entrypoint sh bhoomitrace-frontend:local -c '
+            set -e
+            test "$(id -u)" != "0"
+            test -f /usr/share/nginx/html/index.html
+            test -d /usr/share/nginx/html/assets
+            test ! -e /usr/share/nginx/html/node_modules
+            test ! -e /usr/share/nginx/html/src
+            test ! -e /usr/share/nginx/html/package.json
+            if command -v node >/dev/null 2>&1; then echo "node present in runtime image" >&2; exit 1; fi
+            if command -v pnpm >/dev/null 2>&1; then echo "pnpm present in runtime image" >&2; exit 1; fi
+            echo "frontend image hygiene ok"
           '
 
       - name: Smoke test Compose stack
         run: |
           set -e
           docker compose up -d
+
+          echo "::group::Backend readiness and liveness"
           for i in $(seq 1 60); do
             if curl -sf http://127.0.0.1:3000/health >/dev/null 2>&1; then break; fi
             sleep 2
           done
           curl -sf http://127.0.0.1:3000/health
           curl -sf http://127.0.0.1:3000/health/live
+          echo "::endgroup::"
+
+          echo "::group::Frontend serving and SPA fallback"
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:5173/ >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          root_code=$(curl -s -o /tmp/index.html -w '%{http_code}' http://127.0.0.1:5173/)
+          test "$root_code" = "200"
+          grep -qi '<div id="root"' /tmp/index.html
+          spa_code=$(curl -s -o /tmp/spa.html -w '%{http_code}' http://127.0.0.1:5173/reviewer/cases/123)
+          test "$spa_code" = "200"
+          grep -qi '<div id="root"' /tmp/spa.html
+          echo "::endgroup::"
+
+          echo "::group::Frontend /api/ proxy reaches backend"
+          # Unauthenticated request through the proxy must reach the backend and
+          # return 401 (a broken proxy would return 404 or 502 instead).
+          for i in $(seq 1 30); do
+            proxy_code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5173/api/v1/auth/me)
+            if [ "$proxy_code" = "401" ]; then break; fi
+            sleep 2
+          done
+          echo "GET /api/v1/auth/me via frontend proxy -> $proxy_code"
+          test "$proxy_code" = "401"
+          echo "::endgroup::"
+
           docker compose ps
 
       - name: Tear down Compose stack
