@@ -19,8 +19,12 @@ COPY public ./public
 COPY src ./src
 RUN pnpm run build
 
-# Runtime stage: unprivileged nginx serving only the compiled static assets
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+# Runtime stage: unprivileged nginx serving only the compiled static assets.
+# Pinned to the current stable Alpine release (busybox wget for the healthcheck,
+# uid 101, listening on 8080). Bump the tag to the digest behind `stable-alpine`
+# when updating; Renovate/Dependabot can automate this.
+# Tags: https://hub.docker.com/r/nginxinc/nginx-unprivileged/tags
+FROM nginxinc/nginx-unprivileged:1.30.6-alpine AS runtime
 
 # Replace the default server config (reverse proxy + SPA fallback)
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf

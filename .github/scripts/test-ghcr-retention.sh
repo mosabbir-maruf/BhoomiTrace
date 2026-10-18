@@ -152,6 +152,76 @@ cat > "$workdir/c6g.json" <<'EOF'
 EOF
 VERSIONS_FILE="$workdir/c6g.json" run_file_case "tags not an array" 1 ""
 
+# --- metadata shape must be strictly valid (missing metadata must fail closed) ---
+cat > "$workdir/c6h.json" <<'EOF'
+[{"id":1,"created_at":"2024-01-01T00:00:00Z"}]
+EOF
+VERSIONS_FILE="$workdir/c6h.json" run_file_case "metadata missing" 1 ""
+
+cat > "$workdir/c6i.json" <<'EOF'
+[{"id":1,"created_at":"2024-01-01T00:00:00Z","metadata":{}}]
+EOF
+VERSIONS_FILE="$workdir/c6i.json" run_file_case "metadata.container missing" 1 ""
+
+cat > "$workdir/c6j.json" <<'EOF'
+[{"id":1,"created_at":"2024-01-01T00:00:00Z","metadata":{"container":{}}}]
+EOF
+VERSIONS_FILE="$workdir/c6j.json" run_file_case "metadata.container.tags missing" 1 ""
+
+cat > "$workdir/c6k.json" <<'EOF'
+[{"id":1,"created_at":"2024-01-01T00:00:00Z","metadata":{"container":{"tags":null}}}]
+EOF
+VERSIONS_FILE="$workdir/c6k.json" run_file_case "metadata.container.tags null" 1 ""
+
+cat > "$workdir/c6l.json" <<'EOF'
+[{"id":1,"created_at":"2024-01-01T00:00:00Z","metadata":{"container":{"tags":["ok",123]}}}]
+EOF
+VERSIONS_FILE="$workdir/c6l.json" run_file_case "tag element not a string" 1 ""
+
+cat > "$workdir/c6m.json" <<'EOF'
+[
+  {"id":1,"created_at":"2024-01-01T00:00:00Z","metadata":{"container":{"tags":[]}}},
+  {"id":2,"created_at":"2024-02-01T00:00:00Z","metadata":{"container":{"tags":[]}}},
+  {"id":3,"created_at":"2024-03-01T00:00:00Z","metadata":{"container":{"tags":[]}}}
+]
+EOF
+VERSIONS_FILE="$workdir/c6m.json" run_file_case "explicitly empty tags array is valid" 0 "1"
+
+# --- created_at must be a complete, real UTC timestamp ---
+cat > "$workdir/c6n.json" <<'EOF'
+[{"id":1,"created_at":"2024-01-01T00:00:00Zjunk","metadata":{"container":{"tags":[]}}}]
+EOF
+VERSIONS_FILE="$workdir/c6n.json" run_file_case "timestamp trailing garbage" 1 ""
+
+cat > "$workdir/c6o.json" <<'EOF'
+[{"id":1,"created_at":"2024-01-01T00:00:00","metadata":{"container":{"tags":[]}}}]
+EOF
+VERSIONS_FILE="$workdir/c6o.json" run_file_case "timestamp missing timezone" 1 ""
+
+cat > "$workdir/c6p.json" <<'EOF'
+[{"id":1,"created_at":"2023-02-30T00:00:00Z","metadata":{"container":{"tags":[]}}}]
+EOF
+VERSIONS_FILE="$workdir/c6p.json" run_file_case "timestamp invalid calendar date" 1 ""
+
+cat > "$workdir/c6q.json" <<'EOF'
+[{"id":1,"created_at":1700000000,"metadata":{"container":{"tags":[]}}}]
+EOF
+VERSIONS_FILE="$workdir/c6q.json" run_file_case "timestamp wrong type" 1 ""
+
+cat > "$workdir/c6r.json" <<'EOF'
+[{"id":1,"metadata":{"container":{"tags":[]}}}]
+EOF
+VERSIONS_FILE="$workdir/c6r.json" run_file_case "timestamp missing" 1 ""
+
+cat > "$workdir/c6s.json" <<'EOF'
+[
+  {"id":1,"created_at":"2024-02-29T12:34:56Z","metadata":{"container":{"tags":["main"]}}},
+  {"id":2,"created_at":"2024-03-01T00:00:00Z","metadata":{"container":{"tags":[]}}},
+  {"id":3,"created_at":"2024-04-01T00:00:00Z","metadata":{"container":{"tags":[]}}}
+]
+EOF
+VERSIONS_FILE="$workdir/c6s.json" run_file_case "valid leap-day timestamp is accepted" 0 "1"
+
 VERSIONS_FILE="$workdir/c5c.json" KEEP_COUNT="0" run_file_case "invalid KEEP_COUNT (0)" 1 ""
 VERSIONS_FILE="$workdir/c5c.json" SHA_KEEP_COUNT="abc" run_file_case "invalid SHA_KEEP_COUNT" 1 ""
 VERSIONS_FILE="$workdir/c5c.json" MODE="purge" run_file_case "invalid MODE" 1 ""
@@ -257,6 +327,20 @@ MOCK_FAIL_DELETE_IN=1 run_api_case "API delete failure aborts" candidates4 delet
 MOCK_LIST_FAIL_AFTER_IN=2 MOCK_LIST_FAIL_MODE_IN=non200 run_api_case "API final-count non-200" normal delete 1 "1" "1" "2 3 4 5"
 MOCK_LIST_FAIL_AFTER_IN=2 MOCK_LIST_FAIL_MODE_IN=malformed run_api_case "API final-count malformed" normal delete 1 "1" "1" "2 3 4 5"
 MOCK_LIST_FAIL_AFTER_IN=2 MOCK_LIST_FAIL_MODE_IN=object run_api_case "API final-count invalid (object)" normal delete 1 "1" "1" "2 3 4 5"
+
+# Invalid metadata/timestamp must fail closed before any DELETE (delete mode).
+# Each scenario's oldest version (id 1) is the sole keep-2 candidate, so zero
+# deletes proves the guard aborted before touching the registry.
+run_api_case "API delete: metadata missing" missingmeta delete 1 "" "" ""
+run_api_case "API delete: metadata.container missing" missingcontainer delete 1 "" "" ""
+run_api_case "API delete: metadata.container.tags missing" missingtags delete 1 "" "" ""
+run_api_case "API delete: metadata.container.tags null" nulltags delete 1 "" "" ""
+run_api_case "API delete: tags wrong type" badtagstype delete 1 "" "" ""
+run_api_case "API delete: timestamp missing" tsmissing delete 1 "" "" ""
+run_api_case "API delete: timestamp trailing garbage" tstrailing delete 1 "" "" ""
+run_api_case "API delete: timestamp missing timezone" tsnotz delete 1 "" "" ""
+run_api_case "API delete: timestamp invalid calendar date" tsinvalid delete 1 "" "" ""
+run_api_case "API delete: timestamp wrong type" tswrongtype delete 1 "" "" ""
 
 # ---------------------------------------------------------------------------
 # File-mode delete guard: must refuse and make no HTTP request at all.

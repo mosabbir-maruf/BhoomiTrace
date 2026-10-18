@@ -132,17 +132,28 @@ if [ "$(jq 'length' "$tmpdir/versions.json" 2>/dev/null || echo 0)" = "0" ]; the
 fi
 
 # Validate every version's id, created_at, and tag metadata BEFORE calculating
-# candidates or deleting anything. Any invalid record aborts (fail closed).
+# candidates or deleting anything. Any invalid record aborts (fail closed):
+#   - id must be a positive integer
+#   - created_at must be a complete, real ISO-8601 UTC timestamp ("...Z"); the
+#     regex is fully anchored and a parse/reformat round-trip rejects months,
+#     days, and times that normalise to a different instant
+#   - metadata must be an object with an object "container" carrying a "tags"
+#     array of strings (an explicitly empty array is valid)
+# Missing/null metadata, container, or tags is invalid, so a version can never
+# silently become an untagged deletion candidate and be dropped by mistake.
 if ! jq -e '
-  def tags: (.metadata.container.tags? // []);
   def valid_version:
     try (
       (type == "object")
       and ((.id | type) == "number") and (.id > 0) and (((.id | floor)) == .id)
       and ((.created_at | type) == "string")
-      and (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"))
-      and ((tags | type) == "array")
-      and (all(tags[]; type == "string"))
+      and (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+      and ((.created_at | fromdateiso8601 | gmtime | strftime("%Y-%m-%dT%H:%M:%SZ")) == .created_at)
+      and ((.metadata | type) == "object")
+      and ((.metadata.container | type) == "object")
+      and (.metadata.container | has("tags"))
+      and ((.metadata.container.tags | type) == "array")
+      and (all(.metadata.container.tags[]; type == "string"))
     ) catch false;
   type == "array" and all(.[]; valid_version)
 ' "$tmpdir/versions.json" >/dev/null 2>&1; then

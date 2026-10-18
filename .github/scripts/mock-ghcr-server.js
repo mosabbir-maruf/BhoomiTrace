@@ -2,14 +2,18 @@
 //
 // Usage: node mock-ghcr-server.js <port> <scenario>
 //
-// Scenarios: normal, multipage, empty, non200, malformed, badmetadata, candidates4
+// Scenarios: normal, multipage, empty, non200, malformed, badmetadata, candidates4,
+//            missingmeta, missingcontainer, missingtags, nulltags, badtagstype,
+//            tsmissing, tstrailing, tsnotz, tsinvalid, tswrongtype
 //   normal      5 versions, mixed tags (report candidate: 1)
 //   multipage   5 versions served 2 per page (report candidate: 1)
 //   empty       no versions
 //   non200      versions endpoint returns HTTP 404
 //   malformed   versions endpoint returns invalid JSON
 //   badmetadata a version with no id
-//   candidates4 6 untagged versions (report/Delete candidates: 1 2 3 4)
+//   candidates4 6 untagged versions (report/delete candidates: 1 2 3 4)
+//   missing* / nulltags / badtagstype / ts* : 3 versions whose oldest (id 1) is
+//              the sole keep-2 candidate and carries invalid metadata/timestamp
 //
 // Environment:
 //   MOCK_LOG_DIR          Directory for deletes.log and requests.log (default: os.tmpdir())
@@ -67,6 +71,60 @@ const scenarios = {
   malformed: null,
   badmetadata: [
     { created_at: '2024-01-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  // Invalid-metadata / invalid-timestamp regression scenarios. Each has three
+  // versions so that the oldest (id 1) is the sole deletion candidate under
+  // keep-2; the defect lives on id 1, so without fail-closed validation these
+  // versions would be deleted.
+  missingmeta: [
+    { id: 1, created_at: '2024-01-01T00:00:00Z' },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  missingcontainer: [
+    { id: 1, created_at: '2024-01-01T00:00:00Z', metadata: {} },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  missingtags: [
+    { id: 1, created_at: '2024-01-01T00:00:00Z', metadata: { container: {} } },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  nulltags: [
+    { id: 1, created_at: '2024-01-01T00:00:00Z', metadata: { container: { tags: null } } },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  badtagstype: [
+    { id: 1, created_at: '2024-01-01T00:00:00Z', metadata: { container: { tags: 'main' } } },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  tsmissing: [
+    { id: 1, metadata: { container: { tags: [] } } },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  tstrailing: [
+    { id: 1, created_at: '2024-01-01T00:00:00Zjunk', metadata: { container: { tags: [] } } },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  tsnotz: [
+    { id: 1, created_at: '2024-01-01T00:00:00', metadata: { container: { tags: [] } } },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  tsinvalid: [
+    { id: 1, created_at: '2023-02-30T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
+  ],
+  tswrongtype: [
+    { id: 1, created_at: 1700000000, metadata: { container: { tags: [] } } },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
   ],
 };
 
