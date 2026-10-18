@@ -244,25 +244,16 @@ volumes along with the local database and every uploaded file.
 A job that is `queued` while the worker is stopped is not lost: it stays in the
 database and is claimed when a worker starts again.
 
-### Running the frontend against the local API
+### Browser-origin integration
 
-The Compose stack includes a containerised frontend (a Vite build served by
-unprivileged nginx that reverse-proxies `/api/` to the API on the same origin),
-so `docker compose up -d --build` serves the app at `http://127.0.0.1:5173`.
-To use the optional host-run Vite dev server instead:
+The API's browser-facing contract is designed for cookie-based sessions and CSRF protection. The details that matter when validating the backend locally are:
 
-1. Start the backend stack (`docker compose up -d --build`).
-2. Confirm `http://127.0.0.1:3000/health` returns `200`.
-3. Start the frontend dev server in `frontend/` on port 5173, following its own
-   instructions.
-4. `CORS_ALLOWED_ORIGINS` already defaults to
-   `http://localhost:5173,http://127.0.0.1:5173`. Add your origin if you use a
-   different port.
+- The Compose frontend is served at `http://127.0.0.1:5173` and proxies `/api/` to the API on the same origin.
+- The API is reachable locally at `http://127.0.0.1:3000`; readiness is reported by `/health`.
+- For the optional host-run Vite server, set `CORS_ALLOWED_ORIGINS` to the exact browser origin. The default local list is `http://localhost:5173,http://127.0.0.1:5173`.
+- Browser mutation requests need an `x-csrf-token` header; session cookies are sent with credentials.
 
-Cookie-based sessions require the browser to send credentials, and every
-state-changing request needs an `x-csrf-token` header carrying the token returned
-by `POST /api/v1/auth/login`.
-
+The frontend's package setup, routes, Vite proxy, and browser tests belong in the [frontend README](../frontend/README.md). This guide owns the server-side CORS, session, and REST contracts.
 ## Commands
 
 Run these from `backend/` with `mise` on `PATH`. The `mise exec --` prefix is
