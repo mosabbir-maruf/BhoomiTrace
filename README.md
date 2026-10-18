@@ -1,15 +1,41 @@
+<div align="center">
+
+<img src="frontend/public/favicon.svg" alt="BhoomiTrace" width="120" height="120" />
+
 # BhoomiTrace
 
-BhoomiTrace is an AI-assisted land-record verification and parcel-lineage
-platform. It extracts values from land records with source links, keeps raw and
-reviewed values separate, tracks parcel lineage (split/merge/renumbering),
-reconciles areas and shares, and surfaces explainable findings with a full
-review and audit trail.
+### AI-assisted land-record verification and parcel-lineage platform
 
-> **Scope note.** BhoomiTrace does **not** determine legal ownership and does
-> **not** issue official legal approval. It reconciles records, links evidence,
-> and produces findings that a human reviewer decides on. Records are treated as
-> synthetic demo data only.
+BhoomiTrace extracts values from land records with source links, keeps raw and
+reviewed values separate, tracks parcel lineage (split/merge/renumbering),
+reconciles areas and shares, and surfaces explainable findings with a full review
+and audit trail.
+
+**Track:** LandTech 2026 &nbsp;·&nbsp; **Challenge:** AI-assisted land-record verification
+
+### 🌐 [Live Demo — devtree.online](https://devtree.online/)
+
+⚠️ **Note.** The demo runs on synthetic records only. BhoomiTrace does **not**
+determine legal ownership and does **not** issue official legal approval — it
+reconciles records, links evidence, and produces findings that a human reviewer
+decides on.
+
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-devtree.online-2ea44f?style=flat-square)](https://devtree.online/)
+[![CI](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mosabbir-maruf/BhoomiTrace/actions/workflows/ci.yml)
+[![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/mosabbir-maruf/BhoomiTrace/pkgs/container/bhoomitrace-backend)
+[![License: MIT](https://img.shields.io/badge/License-MIT-3DA639?style=flat-square)](LICENSE)
+
+![Node.js 24](https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Fastify 5](https://img.shields.io/badge/Fastify-5-000000?style=flat-square&logo=fastify&logoColor=white)
+![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=flat-square&logo=postgresql&logoColor=white)
+![React 19](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
+![Vite 8](https://img.shields.io/badge/Vite-8-646CFF?style=flat-square&logo=vite&logoColor=white)
+![Tailwind CSS 4](https://img.shields.io/badge/Tailwind%20CSS-4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white)
+
+</div>
+
+---
 
 ## Repository layout
 
