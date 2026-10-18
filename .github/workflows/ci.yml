@@ -8,6 +8,7 @@ on:
       - 'frontend/**'
       - 'docker/**'
       - 'docker-compose.yml'
+      - 'deploy/**'
       - '.github/workflows/**'
       - '.github/scripts/**'
       - '.env.example'
@@ -174,6 +175,19 @@ jobs:
 
       - name: Run mocked retention tests
         run: bash .github/scripts/test-ghcr-retention.sh
+
+  deploy-tests:
+    name: Production deploy configuration and script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The suite validates the production Compose file with the Docker daemon
+      # and never starts a container, binds a port, or touches a volume.
+      - name: Run deploy verification suite
+        run: bash deploy/tests/run.sh
 
   docker:
     name: Compose validation, image build, and smoke test

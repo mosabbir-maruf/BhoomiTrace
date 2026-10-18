@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the BhoomiTrace health check every five minutes
+Documentation=file:/opt/bhoomitrace/deploy/README.md
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=bhoomitrace-health.service
+
+[Install]
+WantedBy=timers.target

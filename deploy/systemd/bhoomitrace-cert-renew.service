@@ -1,0 +1,19 @@
+[Unit]
+Description=Renew the BhoomiTrace TLS certificate and reload the edge proxy
+Documentation=file:/opt/bhoomitrace/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/bhoomitrace
+EnvironmentFile=-/etc/bhoomitrace/deploy.env
+Environment=BHOOMITRACE_LOG_FILE=/srv/bhoomitrace/logs/cert-renew.log
+User=root
+# certbot renews only when the certificate is close to expiry, and the deploy
+# hook (configured at issue time) publishes the pair and reloads nginx.
+ExecStart=/usr/bin/certbot renew --quiet --deploy-hook /opt/bhoomitrace/deploy/scripts/tls-deploy-hook.sh
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

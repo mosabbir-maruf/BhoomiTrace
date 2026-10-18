@@ -27,6 +27,13 @@ logs/
 .tmp-*
 *.pid
 
+# Production deployment runtime state; never commit
+deploy/env/stack.env
+deploy/env/secrets.env
+deploy/state/
+deploy/backups/
+deploy/.verify/
+
 # Local database data
 .docker-data/
 pgdata/
