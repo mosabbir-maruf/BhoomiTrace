@@ -3,15 +3,18 @@
 // Usage: node mock-ghcr-server.js <port> <scenario>
 //
 // Scenarios: normal, multipage, empty, non200, malformed, badmetadata, candidates4,
-//            missingmeta, missingcontainer, missingtags, nulltags, badtagstype,
-//            tsmissing, tstrailing, tsnotz, tsinvalid, tswrongtype
+//            manifestindex, missingmeta, missingcontainer, missingtags, nulltags,
+//            badtagstype, tsmissing, tstrailing, tsnotz, tsinvalid, tswrongtype
 //   normal      5 versions, mixed tags (report candidate: 1)
 //   multipage   5 versions served 2 per page (report candidate: 1)
 //   empty       no versions
 //   non200      versions endpoint returns HTTP 404
 //   malformed   versions endpoint returns invalid JSON
 //   badmetadata a version with no id
-//   candidates4 6 untagged versions (report/delete candidates: 1 2 3 4)
+//   candidates4 6 tagged, non-sha versions (report/delete candidates: 1 2 3 4)
+//   manifestindex buildx-style multi-arch package: untagged platform/attestation
+//              manifests (ids 1,2) alongside tagged indexes; with keep-2 those
+//              untagged versions must never be candidates or deleted
 //   missing* / nulltags / badtagstype / ts* : 3 versions whose oldest (id 1) is
 //              the sole keep-2 candidate and carries invalid metadata/timestamp
 //
@@ -58,14 +61,28 @@ const scenarios = {
     { id: 5, created_at: '2024-05-01T00:00:00Z', metadata: { container: { tags: ['v1.0.0'] } } },
   ],
   empty: [],
-  // 6 untagged versions keep newest 2 => candidates 1 2 3 4
+  // 6 tagged, non-sha versions keep newest 2 => candidates 1 2 3 4.
+  // They carry tags (not sha-*, not semver) so they are genuine deletion
+  // candidates; an untagged version would instead be protected.
   candidates4: [
+    { id: 1, created_at: '2024-01-01T00:00:00Z', metadata: { container: { tags: ['old-1'] } } },
+    { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: ['old-2'] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: ['old-3'] } } },
+    { id: 4, created_at: '2024-04-01T00:00:00Z', metadata: { container: { tags: ['old-4'] } } },
+    { id: 5, created_at: '2024-05-01T00:00:00Z', metadata: { container: { tags: ['old-5'] } } },
+    { id: 6, created_at: '2024-06-01T00:00:00Z', metadata: { container: { tags: ['old-6'] } } },
+  ],
+  // Models a buildx multi-arch package: retained tags are indexes, and the
+  // platform manifest + attestation manifest are untagged child versions.
+  // With KEEP_COUNT=2 and SHA_KEEP_COUNT=2, ids 4/5 are kept, ids 1/2 are
+  // untagged and therefore protected, and only id 3 (a superseded tagged
+  // index) is a deletion candidate.
+  manifestindex: [
     { id: 1, created_at: '2024-01-01T00:00:00Z', metadata: { container: { tags: [] } } },
     { id: 2, created_at: '2024-02-01T00:00:00Z', metadata: { container: { tags: [] } } },
-    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: [] } } },
-    { id: 4, created_at: '2024-04-01T00:00:00Z', metadata: { container: { tags: [] } } },
-    { id: 5, created_at: '2024-05-01T00:00:00Z', metadata: { container: { tags: [] } } },
-    { id: 6, created_at: '2024-06-01T00:00:00Z', metadata: { container: { tags: [] } } },
+    { id: 3, created_at: '2024-03-01T00:00:00Z', metadata: { container: { tags: ['sha-old'] } } },
+    { id: 4, created_at: '2024-04-01T00:00:00Z', metadata: { container: { tags: ['sha-mid'] } } },
+    { id: 5, created_at: '2024-05-01T00:00:00Z', metadata: { container: { tags: ['sha-new', 'main'] } } },
   ],
   non200: null,
   malformed: null,

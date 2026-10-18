@@ -120,11 +120,11 @@ VERSIONS_FILE="$workdir/c5b.json" run_file_case "total equal KEEP_COUNT" 0 ""
 
 cat > "$workdir/c5c.json" <<'EOF'
 [
-  {"id":1,"created_at":"2024-01-01T00:00:00Z","metadata":{"container":{"tags":[]}}},
-  {"id":2,"created_at":"2024-02-01T00:00:00Z","metadata":{"container":{"tags":[]}}},
-  {"id":3,"created_at":"2024-03-01T00:00:00Z","metadata":{"container":{"tags":[]}}},
-  {"id":4,"created_at":"2024-04-01T00:00:00Z","metadata":{"container":{"tags":[]}}},
-  {"id":5,"created_at":"2024-05-01T00:00:00Z","metadata":{"container":{"tags":[]}}}
+  {"id":1,"created_at":"2024-01-01T00:00:00Z","metadata":{"container":{"tags":["old-1"]}}},
+  {"id":2,"created_at":"2024-02-01T00:00:00Z","metadata":{"container":{"tags":["old-2"]}}},
+  {"id":3,"created_at":"2024-03-01T00:00:00Z","metadata":{"container":{"tags":["old-3"]}}},
+  {"id":4,"created_at":"2024-04-01T00:00:00Z","metadata":{"container":{"tags":["old-4"]}}},
+  {"id":5,"created_at":"2024-05-01T00:00:00Z","metadata":{"container":{"tags":["old-5"]}}}
 ]
 EOF
 VERSIONS_FILE="$workdir/c5c.json" run_file_case "total above KEEP_COUNT" 0 "1 2 3"
@@ -185,7 +185,19 @@ cat > "$workdir/c6m.json" <<'EOF'
   {"id":3,"created_at":"2024-03-01T00:00:00Z","metadata":{"container":{"tags":[]}}}
 ]
 EOF
-VERSIONS_FILE="$workdir/c6m.json" run_file_case "explicitly empty tags array is valid" 0 "1"
+VERSIONS_FILE="$workdir/c6m.json" run_file_case "explicitly empty tags array is valid and protected" 0 ""
+
+# --- untagged child manifests/attestations are protected, never candidates ---
+cat > "$workdir/c7.json" <<'EOF'
+[
+  {"id":1,"created_at":"2024-01-01T00:00:00Z","metadata":{"container":{"tags":[]}}},
+  {"id":2,"created_at":"2024-02-01T00:00:00Z","metadata":{"container":{"tags":[]}}},
+  {"id":3,"created_at":"2024-03-01T00:00:00Z","metadata":{"container":{"tags":["old-tag"]}}},
+  {"id":4,"created_at":"2024-04-01T00:00:00Z","metadata":{"container":{"tags":["sha-new"]}}},
+  {"id":5,"created_at":"2024-05-01T00:00:00Z","metadata":{"container":{"tags":["main"]}}}
+]
+EOF
+VERSIONS_FILE="$workdir/c7.json" run_file_case "untagged manifests are protected (only tagged id 3 is a candidate)" 0 "3"
 
 # --- created_at must be a complete, real UTC timestamp ---
 cat > "$workdir/c6n.json" <<'EOF'
@@ -231,6 +243,7 @@ VERSIONS_FILE="$workdir/c5c.json" MODE="purge" run_file_case "invalid MODE" 1 ""
 # ---------------------------------------------------------------------------
 run_api_case() {
   local name="$1" scenario="$2" mode="$3" expected_exit="$4" expected_cands="$5" expected_deletes="$6" expected_kept="$7"
+  local sha_keep="${8:-10}"
   local logdir="$workdir/log-${scenario}-${mode}-${RANDOM}"
   mkdir -p "$logdir"
 
@@ -255,7 +268,7 @@ $(cat "$logdir/server.log" 2>/dev/null)"
   fi
 
   local out rc cands deletes
-  out=$(MODE="$mode" KEEP_COUNT=2 SHA_KEEP_COUNT=10 \
+  out=$(MODE="$mode" KEEP_COUNT=2 SHA_KEEP_COUNT="$sha_keep" RETENTION_ALLOW_DELETE=1 \
     OWNER=test-owner PACKAGE=test-pkg TOKEN=fake-token \
     API_BASE="http://127.0.0.1:$API_PORT" bash "$SCRIPT" 2>&1)
   rc=$?
@@ -320,6 +333,12 @@ run_api_case "API bad metadata (missing id)" badmetadata report 1 "" "" ""
 run_api_case "API delete (normal)" normal delete 0 "1" "1" "2 3 4 5"
 run_api_case "API delete (candidates4)" candidates4 delete 0 "1 2 3 4" "1 2 3 4" "5 6"
 
+# buildx multi-arch protection: untagged platform/attestation manifests (ids 1,2)
+# are never candidates and never deleted, even while a superseded tagged index
+# (id 3) is. This is the exact shape that broke `docker pull` in production.
+run_api_case "API manifestindex report protects untagged" manifestindex report 0 "3" "" "1 2 4 5" 2
+run_api_case "API manifestindex delete protects untagged" manifestindex delete 0 "3" "3" "1 2 4 5" 2
+
 # delete failure aborts remaining deletions and exits non-zero
 MOCK_FAIL_DELETE_IN=1 run_api_case "API delete failure aborts" candidates4 delete 1 "1 2 3 4" "4" "5 6"
 
@@ -354,7 +373,7 @@ run_file_delete_guard_case() {
   for _ in $(seq 1 50); do grep -q READY "$logdir/server.log" 2>/dev/null && break; sleep 0.1; done
 
   local out rc
-  out=$(MODE=delete KEEP_COUNT=2 SHA_KEEP_COUNT=10 \
+  out=$(MODE=delete KEEP_COUNT=2 SHA_KEEP_COUNT=10 RETENTION_ALLOW_DELETE=1 \
     OWNER=test-owner PACKAGE=test-pkg TOKEN=fake-token \
     API_BASE="http://127.0.0.1:$API_PORT" VERSIONS_FILE="$workdir/c5c.json" \
     bash "$SCRIPT" 2>&1)
@@ -385,12 +404,55 @@ $out"
 run_file_delete_guard_case
 
 # ---------------------------------------------------------------------------
+# Destructive opt-in guard: MODE=delete without RETENTION_ALLOW_DELETE must
+# refuse and make no HTTP request at all (this is what keeps the publish
+# workflow non-destructive even if MODE is set to delete by mistake).
+# ---------------------------------------------------------------------------
+run_delete_optin_guard_case() {
+  local name="delete mode without RETENTION_ALLOW_DELETE refuses and makes no HTTP request"
+  local logdir="$workdir/log-optin-${RANDOM}"
+  mkdir -p "$logdir"
+  MOCK_LOG_DIR="$logdir" node "$MOCK_SERVER" "$API_PORT" normal >"$logdir/server.log" 2>&1 &
+  local srv_pid=$!
+  for _ in $(seq 1 50); do grep -q READY "$logdir/server.log" 2>/dev/null && break; sleep 0.1; done
+
+  local out rc
+  out=$(MODE=delete KEEP_COUNT=2 SHA_KEEP_COUNT=10 \
+    OWNER=test-owner PACKAGE=test-pkg TOKEN=fake-token \
+    API_BASE="http://127.0.0.1:$API_PORT" bash "$SCRIPT" 2>&1)
+  rc=$?
+  kill "$srv_pid" 2>/dev/null || true
+  wait "$srv_pid" 2>/dev/null || true
+
+  local reqs=0 dels=0
+  [ -f "$logdir/requests.log" ] && reqs=$(wc -l < "$logdir/requests.log" | tr -d ' ')
+  [ -f "$logdir/deletes.log" ] && dels=$(wc -l < "$logdir/deletes.log" | tr -d ' ')
+
+  local ok=1 detail=""
+  if [ "$rc" != "1" ]; then ok=0; detail="$detail
+expected exit=1 got=$rc"; fi
+  case "$out" in
+    *"RETENTION_ALLOW_DELETE"*) : ;;
+    *) ok=0; detail="$detail
+missing explicit opt-in refusal message";;
+  esac
+  if [ "$reqs" != "0" ]; then ok=0; detail="$detail
+expected 0 HTTP requests got $reqs"; fi
+  if [ "$dels" != "0" ]; then ok=0; detail="$detail
+expected 0 DELETEs got $dels"; fi
+  record "$ok" "$name" "$detail
+--- output ---
+$out"
+}
+run_delete_optin_guard_case
+
+# ---------------------------------------------------------------------------
 # Connection failure (no server listening) must fail closed.
 # ---------------------------------------------------------------------------
 run_connection_failure_case() {
   local name="API connection failure fails closed"
   local out rc
-  out=$(MODE=delete KEEP_COUNT=2 SHA_KEEP_COUNT=10 \
+  out=$(MODE=delete KEEP_COUNT=2 SHA_KEEP_COUNT=10 RETENTION_ALLOW_DELETE=1 \
     OWNER=test-owner PACKAGE=test-pkg TOKEN=fake-token \
     API_BASE="http://127.0.0.1:1" bash "$SCRIPT" 2>&1)
   rc=$?

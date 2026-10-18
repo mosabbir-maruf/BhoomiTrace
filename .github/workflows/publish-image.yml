@@ -82,20 +82,29 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
-  retention:
-    name: Retain latest ${{ matrix.package }} images (auto-cleanup)
+  retention-audit:
+    name: Audit ${{ matrix.package }} retention (report only)
     runs-on: ubuntu-latest
     needs: publish
+    # Non-destructive audit job. It reports the keep/protected/delete decisions
+    # and NEVER deletes a package version: ghcr-retention.sh runs in report mode
+    # and additionally refuses MODE=delete unless RETENTION_ALLOW_DELETE=1 is set
+    # deliberately. Destructive cleanup stays disabled until a manifest-aware
+    # policy exists, because a retained image tag points at an index whose
+    # platform/attestation manifests are separate, untagged versions. Deleting
+    # one breaks `docker pull` for every tag that references it.
+    # A failure here must never block an otherwise successful publish.
+    continue-on-error: true
     timeout-minutes: 10
     permissions:
       contents: read
-      packages: write
+      packages: read
     strategy:
       fail-fast: false
       matrix:
         package: [bhoomitrace-backend, bhoomitrace-frontend]
     env:
-      MODE: delete
+      MODE: report
       KEEP_COUNT: '2'
       SHA_KEEP_COUNT: '10'
       OWNER: ${{ github.repository_owner }}
@@ -105,5 +114,5 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Run retention cleanup
+      - name: Report retention decisions (no deletions)
         run: bash .github/scripts/ghcr-retention.sh

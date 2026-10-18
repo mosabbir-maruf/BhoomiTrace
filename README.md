@@ -140,9 +140,14 @@ touches the backend, frontend, Docker, or workflow/script paths:
   `ghcr.io/<owner>/bhoomitrace-backend` and
   `ghcr.io/<owner>/bhoomitrace-frontend`. Tags: immutable full-SHA
   (`sha-<40>`), branch, semver (`x.y.z`, `x.y`), and `latest` on the default
-  branch only. After publishing, a retention job trims each package.
-- **`ghcr-retention-report.yml`** — manual dry-run report of the keep/delete
-  decisions; it never deletes unless explicitly enabled.
+  branch only. After publishing, a **report-only audit** job lists each
+  package's keep/protected/delete decisions. It never deletes anything:
+  destructive retention is disabled until a manifest-aware policy exists,
+  because a retained image tag points at an index whose platform and
+  attestation manifests are separate, untagged package versions — deleting one
+  breaks `docker pull` for every tag that references it.
+- **`ghcr-retention-report.yml`** — manual report of the keep/protected/delete
+  decisions. It is always report-only and read-only; it never deletes.
 
 ## Getting started
 
