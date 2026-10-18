@@ -11,7 +11,7 @@ reviewed values separate, tracks parcel lineage (split / merge / renumbering),
 reconciles areas and shares, and surfaces explainable findings with a full review
 and audit trail.
 
-**Track:** LandTech 2026 &nbsp;·&nbsp; **Challenge:** AI-assisted land-record verification
+**LandTech 2026** &nbsp;·&nbsp; **P3 - Catch Fraud & Double-Selling**
 
 ### 🌐 [Live Demo — devtree.online](https://devtree.online/)
 
