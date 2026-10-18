@@ -1,0 +1,19 @@
+[Unit]
+Description=BhoomiTrace health and capacity check (readiness, liveness, disk)
+Documentation=file:/opt/bhoomitrace/deploy/README.md
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/bhoomitrace
+EnvironmentFile=-/etc/bhoomitrace/deploy.env
+Environment=BHOOMITRACE_LOG_FILE=/srv/bhoomitrace/logs/health.log
+Environment=BHOOMITRACE_CLOUDWATCH_NAMESPACE=BhoomiTrace
+User=root
+ExecStart=/opt/bhoomitrace/deploy/scripts/health-check.sh --skip-public
+TimeoutStartSec=180
+Nice=15
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+[Unit]
+Description=BhoomiTrace off-host backup (PostgreSQL dump + evidence archive)
+Documentation=file:/opt/bhoomitrace/deploy/README.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Repository location. Change this if the checkout lives elsewhere.
+WorkingDirectory=/opt/bhoomitrace
+# Optional host-specific overrides; the unit runs without it.
+EnvironmentFile=-/etc/bhoomitrace/deploy.env
+# Durable log for the success/failure record, separate from journald.
+Environment=BHOOMITRACE_LOG_FILE=/srv/bhoomitrace/logs/backup.log
+# Publishes BackupSuccess/BackupFailure when a namespace is configured.
+Environment=BHOOMITRACE_CLOUDWATCH_NAMESPACE=BhoomiTrace
+# Reading the evidence directory (uid 1000, mode 0750) and the AWS CLI need root.
+User=root
+ExecStart=/opt/bhoomitrace/deploy/scripts/backup-all.sh
+TimeoutStartSec=3600
+# Backups must not compete with the application for CPU or disk bandwidth.
+Nice=10
+IOSchedulingClass=idle
+# A failed backup must leave a non-zero unit state so it is visible and alarmable.
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

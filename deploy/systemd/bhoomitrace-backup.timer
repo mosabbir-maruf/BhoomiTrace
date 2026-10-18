@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the BhoomiTrace off-host backup daily
+Documentation=file:/opt/bhoomitrace/deploy/README.md
+
+[Timer]
+# 20:15 UTC = 02:15 Asia/Dhaka. UTC is used explicitly so the schedule does not
+# move with the host timezone.
+OnCalendar=*-*-* 20:15:00 UTC
+# Spread over a few minutes to avoid a thundering herd against S3 or the database.
+RandomizedDelaySec=300
+# If the host was down at the scheduled time, run once shortly after boot.
+Persistent=true
+Unit=bhoomitrace-backup.service
+
+[Install]
+WantedBy=timers.target

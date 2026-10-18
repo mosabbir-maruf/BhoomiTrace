@@ -1,0 +1,81 @@
+{
+  "agent": {
+    "metrics_collection_interval": 60,
+    "run_as_user": "root",
+    "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log"
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/srv/bhoomitrace/logs/backup.log",
+            "log_group_name": "/bhoomitrace/prod/backup",
+            "log_stream_name": "{instance_id}",
+            "retention_in_days": 90,
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/srv/bhoomitrace/logs/health.log",
+            "log_group_name": "/bhoomitrace/prod/health",
+            "log_stream_name": "{instance_id}",
+            "retention_in_days": 30,
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/srv/bhoomitrace/logs/deploy.log",
+            "log_group_name": "/bhoomitrace/prod/deploy",
+            "log_stream_name": "{instance_id}",
+            "retention_in_days": 90,
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/srv/bhoomitrace/logs/restore.log",
+            "log_group_name": "/bhoomitrace/prod/restore",
+            "log_stream_name": "{instance_id}",
+            "retention_in_days": 90,
+            "timezone": "UTC"
+          },
+          {
+            "file_path": "/srv/bhoomitrace/logs/cert-renew.log",
+            "log_group_name": "/bhoomitrace/prod/cert-renew",
+            "log_stream_name": "{instance_id}",
+            "retention_in_days": 30,
+            "timezone": "UTC"
+          }
+        ]
+      }
+    },
+    "force_flush_interval": 15
+  },
+  "metrics": {
+    "namespace": "BhoomiTrace",
+    "append_dimensions": {
+      "InstanceId": "${aws:InstanceId}"
+    },
+    "aggregation_dimensions": [["InstanceId"]],
+    "metrics_collected": {
+      "disk": {
+        "measurement": ["used_percent", "inodes_free"],
+        "resources": ["/", "/srv/bhoomitrace"],
+        "drop_device": true
+      },
+      "mem": {
+        "measurement": ["mem_used_percent"]
+      },
+      "swap": {
+        "measurement": ["swap_used_percent"]
+      },
+      "cpu": {
+        "totalcpu": true,
+        "measurement": [
+          {
+            "name": "cpu_usage_active",
+            "rename": "cpu_usage_active",
+            "unit": "Percent"
+          }
+        ]
+      }
+    }
+  }
+}

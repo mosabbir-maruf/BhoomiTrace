@@ -1,0 +1,13 @@
+[Unit]
+Description=Check twice daily whether the BhoomiTrace TLS certificate needs renewal
+Documentation=file:/opt/bhoomitrace/deploy/README.md
+
+[Timer]
+# Let's Encrypt recommends two attempts per day with a random delay.
+OnCalendar=*-*-* 00,12:30:00 UTC
+RandomizedDelaySec=3600
+Persistent=true
+Unit=bhoomitrace-cert-renew.service
+
+[Install]
+WantedBy=timers.target
