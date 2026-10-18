@@ -143,12 +143,13 @@ The proxy accepts request bodies up to 6 MiB (the backend default
 `UPLOAD_MAX_BYTES` is 5 MiB); raise `client_max_body_size` in
 `frontend/nginx/default.conf` if you increase the backend limit.
 
-To build the image directly:
+To build the image directly (from the repository root):
 
 ```bash
 docker build -t bhoomitrace-frontend:local ./frontend
-docker run --rm -p 127.0.0.1:5173:8080 --add-host api:127.0.0.1 bhoomitrace-frontend:local
 ```
+
+For a working browser session with the API proxy, use the root [Docker Compose quickstart](../README.md). The standalone image needs a reachable backend service named `api` on its Docker network; the command above intentionally only builds the image.
 
 ---
 
